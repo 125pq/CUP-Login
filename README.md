@@ -1,152 +1,93 @@
-# srun
+# srun-cup
 
-[![GitHub stars](https://img.shields.io/github/stars/zu1k/srun)](https://github.com/zu1k/srun/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/zu1k/srun)](https://github.com/zu1k/srun/network)
-[![GitHub issues](https://img.shields.io/github/issues/zu1k/srun)](https://github.com/zu1k/srun/issues)
-[![Release](https://img.shields.io/github/release/zu1k/srun)](https://github.com/zu1k/srun/releases)
-[![Build](https://github.com/zu1k/srun/actions/workflows/build-test.yml/badge.svg)](https://github.com/zu1k/srun/actions/workflows/build-test.yml)
-[![GitHub license](https://img.shields.io/github/license/zu1k/srun)](https://github.com/zu1k/srun/blob/master/LICENSE)
+A practical fork of [zu1k/srun](https://github.com/zu1k/srun) with ready-to-use login scripts for China University of Petroleum, Beijing (CUP).
 
-Srun authentication system login tools. [compatible versions](https://github.com/zu1k/srun/discussions/8)
+Chinese documentation: [README.zh-CN.md](README.zh-CN.md)
 
-## Features
+## What This Fork Adds
 
-- Support both command line and config file
-- Multiple IP acquisition methods
-  - User Specified
-  - Auto detect
-  - User select
-  - Query by NIC name
-- Support strict bind
-- Support multiple users login, suitable for multi-dial
-- Support multi CPU architecture
-- Support multi system
+- Windows one-click launcher: `login-cup.bat`
+- CUP-oriented PowerShell script: `login-cup.ps1`
+- Auto server fallback: `https://login.cup.edu.cn` -> `http://login.cup.edu.cn`
+- Auto username candidate attempts (no suffix and common operator suffixes)
+- Optional local credential cache for true double-click auto login
 
-## Usage
+## Security
 
-[Pre-built binaries](https://github.com/zu1k/srun/releases)
+The script can cache credentials locally **on your machine only**:
 
-### CMD mode
+- `.login-cup.credential.json` (encrypted by Windows user context)
+- `.login-cup.last-username`
 
-```
-./srun login -u USERNAME -p PASSWORD -i IP [-s AUTH_SERVER]
+Both files are ignored by git and are never intended to be pushed.
+
+To clear local saved data:
+
+```powershell
+Remove-Item .\.login-cup.credential.json, .\.login-cup.last-username -ErrorAction SilentlyContinue
 ```
 
-`AUTH_SERVER` should contain protocols, e.g. `http://10.0.0.1`.
+## Quick Start (Windows)
 
-#### Which IP to be authorized?
+1. Build once (if `target\debug\srun.exe` does not exist):
 
-srun support three methods of specifying IP:
-
-- use `-i IP` to specify ip
-- use `-d` to auto detect ip
-- use `--select-ip` to select ip
-
-##### specify IP
-
-You need to check the IP address of each network interfaces in advance and choose the correct IP to be authorized.
-
-##### detect IP
-
-srun support automatic IP detection, it determines the IP address from the information returned by the authentication server.
-
-This is useful in cases where you only have one IP address to authorize.
-
-If you are multidialing and have multiple legitimate IPs at the same time, you need to authorize multiple IPs at the same time, this method will not authorize all IPs properly.
-
-##### select IP
-
-This method is similar to the first method, except that it saves you the trouble of manually querying all the IPs.
-
-srun will query all the legitimate IPs in advance and then print a list of IPs for you to choose from.
-
-```sh
-$ ./srun login -u USERNAME -p PASSWORD --select-ip
-Please select your IP:
-    1. 192.168.226.5
-    2. 10.27.196.218
-    3. 172.16.150.1
-    4. 192.168.128.1
-    5. 198.10.0.1
-2
-you choose 10.27.196.218
-...
+```powershell
+cargo build
 ```
 
-Please note that when your computer has only one IP that can be authorized, we will simply omit the selection process and use this IP.
+2. First login (saves account/password after success):
 
-### Using a Config
-
-Usually, it is sufficient to specify the information directly using command line parameters.
-
-In order to meet the needs of multi-dial users, srun support reading multiple user information from a config file.
-
-```
-./srun login -c config.json
+```powershell
+.\login-cup.ps1 -Username YOUR_ID -Password YOUR_PASSWORD
 ```
 
-config file template
+3. Next login:
 
-```json
-{
-    "server": "http://10.0.0.1",
-    "strict_bind": false,
-    "double_stack": false,
-    "retry_delay": 1000,
-    "retry_times": 3,
-    "n": 200,
-    "type": 1,
-    "acid": 12,
-    "os": "Windows",
-    "name": "Windows 98",
-    "users": [
-        {
-            "username": "username1",
-            "password": "password1",
-            "ip": "10.1.2.3"
-        },
-        {
-            "username": "username2@cmcc",
-            "password": "password2",
-            "if_name": "macvlan1"
-        }
-    ]
-}
+- Double-click `login-cup.bat`, or
+- Run `./login-cup.ps1` with no args
+
+## Script Behavior
+
+Default behavior of `login-cup.ps1`:
+
+- server: auto try `https://login.cup.edu.cn`, then fallback to `http://login.cup.edu.cn`
+- IP mode: auto-detect (`-d`)
+- auth params: `--acid 1 --type 1`
+- username candidates (when no `@`):
+  - `username`
+  - `username@xn`
+  - `username@cmcc`
+  - `username@cucc`
+  - `username@ctcc`
+
+Useful options:
+
+```powershell
+# Force one operator suffix
+.\login-cup.ps1 -Username YOUR_ID -Password YOUR_PASSWORD -Operator xn
+
+# Disable suffix attempts
+.\login-cup.ps1 -Username YOUR_ID -Password YOUR_PASSWORD -Operator none
+
+# Specify fixed IP
+.\login-cup.ps1 -Username YOUR_ID -Password YOUR_PASSWORD -Ip 10.x.x.x
+
+# Override acid/type if your portal differs
+.\login-cup.ps1 -Username YOUR_ID -Password YOUR_PASSWORD -Acid 1 -Type 1
 ```
 
-As you can see, we support `ip` or `if_name`.
+## Original srun Features
 
-If your IP will not change, you can use `ip` to specify directly.
+From upstream `srun`:
 
-But for multi-dial, IP may be automatically assigned by DHCP and may change, at this time we suggest to use `if_name` to specify the corresponding NIC name, we will automatically query the IP under that NIC as the IP to be authorized.
+- Command-line and config-file login
+- Multiple IP acquisition modes
+- Strict bind support
+- Multi-user support
+- Cross-platform support
 
-On windows, the NIC name should be like `{93123211-9629-4E04-82F0-EA2E4F221468}`, use `--select-ip` to see.
-
-### Operator selection
-
-Some colleges support network operator selection, which implemented by append the operator code to the username.
-
-Operator code:
-
-- 中国电信: [`chinanet`, `ctcc`] 
-- 中国移动: [`cmcc`] 
-- 中国联通: [`unicom`, `cucc`]
-- 校园网: [`xn`] 
-
-For example, if you choose `cmcc`, just append `@cmcc` to your username, like `202112345@cmcc`.
-
-This code needs to be confirmed by capturing packets.
-
-### TLS support
-
-To keep the binary as small as possible, the pre-compiled binary remove the non-essential `tls` support
-
-If your authentication system uses `https`, You need to compile it yourself with feature `tls` enabled.
-
-```sh
-cargo build --features "tls" --release
-```
+Upstream repository: <https://github.com/zu1k/srun>
 
 ## License
 
-**srun** © [zu1k](https://github.com/zu1k), Released under the [GPL-3.0](./LICENSE) License.<br>
+This fork keeps the original GPL-3.0 license from upstream.

@@ -3,3 +3,5 @@
 /Packet.lib
 /config_test.json
 /.vscode
+/.login-cup.credential.json
+/.login-cup.last-username
