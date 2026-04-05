@@ -46,6 +46,38 @@ cargo build
 - Double-click `login-cup.bat`, or
 - Run `./login-cup.ps1` with no args
 
+## Build One-Click Windows Installer
+
+This project includes an Inno Setup script so you can ship a standard `.exe` installer.
+
+1. Install Inno Setup 6 (so `ISCC.exe` is available).
+2. Build and package in one command:
+
+```powershell
+.\build\build-windows-installer.ps1
+```
+
+Output installer:
+
+- `build\release\srun-cup-setup-<version>.exe`
+
+What the installer does:
+
+- installs `srun.exe`, `login-cup.ps1`, `login-cup.bat`, `login-cup.vbs`
+- creates Start Menu shortcuts: `One-click login` and `Debug login`
+- optional desktop shortcut and startup shortcut
+
+Installed user experience:
+
+- end users only need to download, install, and click the shortcut (no Rust toolchain required)
+- if no saved credential exists, a GUI dialog asks for username and password on first run
+- credentials are saved after successful login for future one-click use
+
+Runtime credential storage location (installed mode):
+
+- `%LOCALAPPDATA%\srun-cup\.login-cup.credential.json`
+- `%LOCALAPPDATA%\srun-cup\.login-cup.last-username`
+
 ## Script Behavior
 
 Default behavior of `login-cup.ps1`:

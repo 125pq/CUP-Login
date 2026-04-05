@@ -46,6 +46,46 @@ cargo build
 - 直接双击 `login-cup.bat`，或
 - 在 PowerShell 中运行 `./login-cup.ps1`（不传参数）
 
+## 打包一键安装版 Windows 软件
+
+仓库已提供 Inno Setup 安装脚本，可生成标准 `.exe` 安装包。
+
+1. 先安装 Inno Setup 6（确保有 `ISCC.exe`）。
+2. 一条命令完成构建与打包：
+
+```powershell
+.\build\build-windows-installer.ps1
+```
+
+输出位置：
+
+- `build\release\srun-cup-setup-<version>.exe`
+
+安装包会：
+
+- 安装 `srun.exe`、`login-cup.ps1`、`login-cup.bat`
+- 安装 `login-cup.vbs`（默认一键启动器）
+- 创建开始菜单快捷方式（One-click login / Debug login）
+- 可选创建桌面快捷方式和开机启动快捷方式
+
+安装后使用体验：
+
+- 双击快捷方式即可登录，无需安装 Rust 或手动配置命令
+- 首次运行若无已保存凭据，会弹出图形化窗口输入账号密码
+- 登录成功后自动保存，下次可直接一键登录
+- 登录成功/已登录后，会弹出“开机静默自启动”开关提示
+
+调试参数（给脚本/自动化使用）：
+
+- `login-cup.vbs --set-autostart-on`：开启开机静默自启动
+- `login-cup.vbs --set-autostart-off`：关闭开机静默自启动
+- `login-cup.vbs --silent`：静默运行（不弹窗）
+
+安装后凭据存储位置：
+
+- `%LOCALAPPDATA%\srun-cup\.login-cup.credential.json`
+- `%LOCALAPPDATA%\srun-cup\.login-cup.last-username`
+
 ## 脚本默认行为
 
 `login-cup.ps1` 默认：
