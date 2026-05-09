@@ -64,7 +64,7 @@ Output installer:
 What the installer does:
 
 - installs `srun.exe`, `login-cup.ps1`, `login-cup.bat`, `login-cup.vbs`
-- creates Start Menu shortcuts: `One-click login` and `Debug login`
+- creates Start Menu shortcuts: `CUP Login` and `Debug login`
 - optional desktop shortcut and startup shortcut
 
 Installed user experience:

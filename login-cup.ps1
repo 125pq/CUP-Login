@@ -64,6 +64,7 @@ function Get-LoginHintText {
     switch ($status) {
         'failed_auth' { return 'Username or password is incorrect. Please retry.' }
         'failed' { return 'Last login failed. Check network/settings and retry.' }
+        'needs_credentials' { return 'Enter username and password once to enable CUP Login.' }
         default { return 'Credentials are saved locally after successful login.' }
     }
 }
@@ -311,7 +312,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword) {
     }
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = 'srun-cup login'
+    $form.Text = 'CUP Login'
     $form.StartPosition = 'CenterScreen'
     $form.FormBorderStyle = 'FixedDialog'
     $form.MaximizeBox = $false
@@ -461,6 +462,13 @@ function Get-SrunExe {
     return $builtExe
 }
 
+function Start-InteractiveLoginWindow {
+    $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { Join-Path $PSScriptRoot 'login-cup.ps1' }
+    $quotedScriptPath = '"' + $scriptPath.Replace('"', '""') + '"'
+    $arguments = @('-WindowStyle', 'Hidden', '-STA', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $quotedScriptPath)
+    Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $PSScriptRoot | Out-Null
+}
+
 $savedCredential = Get-SavedCredential
 
 $defaultUsername = if ($Username) { $Username } elseif ($savedCredential -and $savedCredential.Username) { $savedCredential.Username } else { Get-LastUsername }
@@ -468,14 +476,17 @@ $defaultPassword = if ($Password) { $Password } elseif ($savedCredential -and $s
 
 if ($Silent) {
     if (-not $defaultUsername -or -not $defaultPassword) {
-        Write-ResultFile 'failed' 'Login failed' 'Silent login skipped because credentials are missing.'
-        exit 1
+        Write-ResultFile 'needs_credentials' 'Login not configured' 'Please enter username and password once to enable silent startup.'
+        Start-InteractiveLoginWindow
+        exit 0
     }
 
     $silentResult = Invoke-LoginAttempt $defaultUsername $defaultPassword
     if ($silentResult.Success) {
         exit 0
     }
+
+    Start-InteractiveLoginWindow
     exit 1
 }
 

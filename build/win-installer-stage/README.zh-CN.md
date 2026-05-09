@@ -65,7 +65,7 @@ cargo build
 
 - 安装 `srun.exe`、`login-cup.ps1`、`login-cup.bat`
 - 安装 `login-cup.vbs`（默认一键启动器）
-- 创建开始菜单快捷方式（One-click login / Debug login）
+- 创建开始菜单快捷方式（CUP Login / Debug login）
 - 可选创建桌面快捷方式和开机启动快捷方式
 
 安装后使用体验：

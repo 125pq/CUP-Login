@@ -1,5 +1,5 @@
-#define MyAppName "srun-cup"
-#define MyAppPublisher "srun-cup"
+#define MyAppName "CUP Login"
+#define MyAppPublisher "CUP Login"
 #define MyAppLauncherName "login-cup.vbs"
 #define MyAppDebugName "login-cup.bat"
 
@@ -45,12 +45,20 @@ Name: "autostart"; Description: "Run on Windows startup (current user)"; GroupDe
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}\One-click login"; Filename: "{app}\{#MyAppLauncherName}"
+Name: "{autoprograms}\{#MyAppName}\CUP Login"; Filename: "{app}\{#MyAppLauncherName}"
+Name: "{autoprograms}\{#MyAppName}\Silent login"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--silent"
 Name: "{autoprograms}\{#MyAppName}\Debug login"; Filename: "{app}\{#MyAppDebugName}"
 Name: "{autoprograms}\{#MyAppName}\Enable silent autostart"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-on"
 Name: "{autoprograms}\{#MyAppName}\Disable silent autostart"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-off"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Tasks: desktopicon
-Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Tasks: autostart
+Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--silent"; Tasks: autostart
+
+[InstallDelete]
+Type: files; Name: "{autoprograms}\{#MyAppName}\Silent login.lnk"
+Type: files; Name: "{autoprograms}\{#MyAppName}\One-click login.lnk"
+Type: files; Name: "{autoprograms}\srun-cup\Silent login.lnk"
+Type: files; Name: "{autoprograms}\srun-cup\One-click login.lnk"
+Type: dirifempty; Name: "{autoprograms}\srun-cup"
 
 [Run]
-Filename: "{app}\{#MyAppLauncherName}"; Description: "Run one-click login now"; Flags: nowait postinstall skipifsilent shellexec
+Filename: "{app}\{#MyAppLauncherName}"; Description: "Run CUP Login now"; Flags: nowait postinstall skipifsilent shellexec

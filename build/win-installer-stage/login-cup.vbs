@@ -1,12 +1,12 @@
 Option Explicit
 
-Dim shell, fso, scriptDir, batPath, stateRoot, resultPath, errorLogPath
-Dim cmd, i, arg, exitCode, statusText, titleText, messageText, detailText
+Dim shell, fso, scriptDir, ps1Path, stateRoot, resultPath, errorLogPath
+Dim cmd, i, arg, exitCode, windowStyle, statusText, titleText, messageText, detailText
 Dim runKey, runValueName, autostartCmd, silentMode, forceAutoStartMode
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
-batPath = scriptDir & "\login-cup.bat"
+ps1Path = scriptDir & "\login-cup.ps1"
 stateRoot = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\srun-cup"
 runKey = "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\"
 runValueName = "srun-cup"
@@ -14,7 +14,7 @@ autostartCmd = Chr(34) & "wscript.exe" & Chr(34) & " //B //Nologo " & Chr(34) & 
 silentMode = False
 forceAutoStartMode = ""
 
-cmd = "cmd.exe /c " & Chr(34) & Chr(34) & batPath & Chr(34)
+cmd = QuoteArg("powershell.exe") & " -WindowStyle Hidden -STA -NoProfile -ExecutionPolicy Bypass -File " & QuoteArg(ps1Path)
 
 For i = 0 To WScript.Arguments.Count - 1
     arg = WScript.Arguments(i)
@@ -26,15 +26,12 @@ For i = 0 To WScript.Arguments.Count - 1
         Case "--set-autostart-off"
             forceAutoStartMode = "off"
         Case Else
-            arg = Replace(arg, Chr(34), Chr(34) & Chr(34))
-            cmd = cmd & " " & Chr(34) & arg & Chr(34)
+            cmd = cmd & " " & QuoteArg(arg)
     End Select
 Next
 
-cmd = cmd & Chr(34)
-
 If silentMode Then
-    cmd = cmd & " " & Chr(34) & "-Silent" & Chr(34)
+    cmd = cmd & " " & QuoteArg("-Silent")
 End If
 
 If forceAutoStartMode = "on" Then
@@ -45,7 +42,13 @@ ElseIf forceAutoStartMode = "off" Then
     WScript.Quit 0
 End If
 
-exitCode = shell.Run(cmd, 0, True)
+If silentMode Then
+    windowStyle = 0
+Else
+    windowStyle = 1
+End If
+
+exitCode = shell.Run(cmd, windowStyle, True)
 
 WScript.Quit exitCode
 
@@ -61,3 +64,7 @@ Sub SetAutoStart(enableIt)
     End If
     On Error GoTo 0
 End Sub
+
+Function QuoteArg(value)
+    QuoteArg = Chr(34) & Replace(value, Chr(34), Chr(34) & Chr(34)) & Chr(34)
+End Function
