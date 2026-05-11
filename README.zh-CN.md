@@ -73,7 +73,7 @@ cargo build
 - 双击快捷方式即可登录，无需安装 Rust 或手动配置命令
 - 首次运行若无已保存凭据，会弹出图形化窗口输入账号密码
 - 登录成功后自动保存，下次可直接一键登录
-- 登录成功/已登录后，会弹出“开机静默自启动”开关提示
+- 图形界面提供注销按钮，以及开机静默启动/断线重连开关
 
 调试参数（给脚本/自动化使用）：
 
@@ -85,6 +85,8 @@ cargo build
 
 - `%LOCALAPPDATA%\srun-cup\.login-cup.credential.json`
 - `%LOCALAPPDATA%\srun-cup\.login-cup.last-username`
+
+开机静默启动和断线重连会写入当前用户的 Windows 启动项，可在图形界面里勾选或取消。
 
 ## 脚本默认行为
 

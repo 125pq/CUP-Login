@@ -9,6 +9,8 @@ param(
     [int]$RetryTimes = 1,
     [int]$RetryDelay = 100,
     [switch]$Silent,
+    [switch]$Reconnect,
+    [int]$ReconnectInterval = 60,
     [switch]$DetectIp = $true,
     [string]$BuildMode = 'auto'
 )
@@ -147,25 +149,72 @@ function Clear-SavedCredential {
     Remove-Item -Path $savedCredentialFile -ErrorAction SilentlyContinue
 }
 
+function Get-AutoStartCommand {
+    return '"wscript.exe" //B //Nologo "' + (Join-Path $PSScriptRoot 'login-cup.vbs') + '" --silent'
+}
+
+function Get-ReconnectCommand {
+    return '"wscript.exe" //B //Nologo "' + (Join-Path $PSScriptRoot 'login-cup.vbs') + '" --reconnect'
+}
+
 function Get-AutoStartEnabled {
     $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'CUP Login.lnk'
+
+    if (Test-Path $startupShortcut) {
+        return $true
+    }
+
     try {
-        $value = (Get-ItemProperty -Path $runPath -Name 'srun-cup' -ErrorAction Stop).'srun-cup'
+        $value = (Get-ItemProperty -Path $runPath -Name 'CUP Login' -ErrorAction Stop).'CUP Login'
+        return ($value -and $value -match 'login-cup\.vbs')
+    } catch {
+        try {
+            $legacyValue = (Get-ItemProperty -Path $runPath -Name 'srun-cup' -ErrorAction Stop).'srun-cup'
+            return ($legacyValue -and $legacyValue -match 'login-cup\.vbs')
+        } catch {
+            return $false
+        }
+    }
+}
+
+function Set-AutoStartEnabled([bool]$enabled) {
+    $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'CUP Login.lnk'
+    $legacyStartupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'srun-cup.lnk'
+    $cmd = Get-AutoStartCommand
+
+    if ($enabled) {
+        New-Item -Path $runPath -Force | Out-Null
+        Set-ItemProperty -Path $runPath -Name 'CUP Login' -Value $cmd
+        Remove-ItemProperty -Path $runPath -Name 'srun-cup' -ErrorAction SilentlyContinue
+    } else {
+        Remove-ItemProperty -Path $runPath -Name 'CUP Login' -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path $runPath -Name 'srun-cup' -ErrorAction SilentlyContinue
+        Remove-Item -Path $startupShortcut -ErrorAction SilentlyContinue
+        Remove-Item -Path $legacyStartupShortcut -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-ReconnectEnabled {
+    $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    try {
+        $value = (Get-ItemProperty -Path $runPath -Name 'CUP Login Reconnect' -ErrorAction Stop).'CUP Login Reconnect'
         return ($value -and $value -match 'login-cup\.vbs')
     } catch {
         return $false
     }
 }
 
-function Set-AutoStartEnabled([bool]$enabled) {
+function Set-ReconnectEnabled([bool]$enabled) {
     $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-    $cmd = '"wscript.exe" //B //Nologo "' + (Join-Path $PSScriptRoot 'login-cup.vbs') + '" --silent'
+    $cmd = Get-ReconnectCommand
 
     if ($enabled) {
         New-Item -Path $runPath -Force | Out-Null
-        Set-ItemProperty -Path $runPath -Name 'srun-cup' -Value $cmd
+        Set-ItemProperty -Path $runPath -Name 'CUP Login Reconnect' -Value $cmd
     } else {
-        Remove-ItemProperty -Path $runPath -Name 'srun-cup' -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path $runPath -Name 'CUP Login Reconnect' -ErrorAction SilentlyContinue
     }
 }
 
@@ -192,7 +241,7 @@ function Resolve-ServerCandidates {
     return @('https://login.cup.edu.cn', 'http://login.cup.edu.cn')
 }
 
-function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword) {
+function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bool]$clearCredentialOnFailure = $true) {
     $usernameCandidates = Resolve-UsernameCandidates $inputUsername
     $servers = Resolve-ServerCandidates
     $srunExe = Get-SrunExe
@@ -290,13 +339,73 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword) {
             Write-ErrorLog $lastError
         }
 
-        Clear-SavedCredential
+        if ($clearCredentialOnFailure) {
+            Clear-SavedCredential
+        }
         Write-ResultFile $lastFailureStatus 'Login failed' $lastFailureMessage
 
         return @{
             Success = $false
             Status = $lastFailureStatus
             Message = if ($lastFailureStatus -eq 'failed_auth') { 'Username or password is incorrect. Please retry.' } else { 'Login failed. Check network and retry.' }
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
+function Invoke-LogoutAttempt([string]$inputUsername) {
+    $usernameCandidates = Resolve-UsernameCandidates $inputUsername
+    $servers = Resolve-ServerCandidates
+    $srunExe = Get-SrunExe
+
+    $baseArguments = @('logout', '--acid', $Acid)
+    if ($Ip) {
+        $baseArguments += @('-i', $Ip)
+    } elseif ($DetectIp) {
+        $baseArguments += '-d'
+    } else {
+        throw 'Provide -Ip or enable -DetectIp.'
+    }
+
+    Push-Location $PSScriptRoot
+    try {
+        Write-ResultFile 'running' 'Logout running' 'Trying campus network logout...'
+        $lastError = ''
+
+        foreach ($serverCandidate in $servers) {
+            foreach ($usernameCandidate in $usernameCandidates) {
+                $arguments = @('logout', '-s', $serverCandidate, '-u', $usernameCandidate) + $baseArguments[1..($baseArguments.Count - 1)]
+                try {
+                    $output = & $srunExe @arguments 2>&1
+                    $exitCode = $LASTEXITCODE
+                } catch {
+                    $output = @($_ | Out-String)
+                    $exitCode = 1
+                }
+
+                if ($output) {
+                    $output | ForEach-Object { Write-Host $_ }
+                }
+
+                $lastError = ($output | Out-String)
+                Write-ErrorLog $lastError
+
+                if ($exitCode -eq 0) {
+                    Write-ResultFile 'logout_success' 'Logout succeeded' 'Logout succeeded.'
+                    return @{
+                        Success = $true
+                        Message = 'Logout succeeded.'
+                    }
+                }
+            }
+        }
+
+        Write-ErrorLog $lastError
+        Write-ResultFile 'failed' 'Logout failed' "Logout failed. See $lastErrorLogFile"
+        return @{
+            Success = $false
+            Message = 'Logout failed. Check network and retry.'
         }
     } finally {
         Pop-Location
@@ -317,7 +426,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword) {
     $form.FormBorderStyle = 'FixedDialog'
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
-    $form.ClientSize = New-Object System.Drawing.Size(420, 260)
+    $form.ClientSize = New-Object System.Drawing.Size(420, 300)
     $form.TopMost = $true
 
     $labelUser = New-Object System.Windows.Forms.Label
@@ -351,23 +460,76 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword) {
     $checkAutoStart.AutoSize = $true
     $checkAutoStart.Checked = Get-AutoStartEnabled
 
+    $checkReconnect = New-Object System.Windows.Forms.CheckBox
+    $checkReconnect.Text = 'Enable reconnect'
+    $checkReconnect.Location = New-Object System.Drawing.Point(110, 118)
+    $checkReconnect.AutoSize = $true
+    $checkReconnect.Checked = Get-ReconnectEnabled
+
     $labelTip = New-Object System.Windows.Forms.Label
     $labelTip.Text = Get-LoginHintText
-    $labelTip.Location = New-Object System.Drawing.Point(20, 124)
+    $labelTip.Location = New-Object System.Drawing.Point(20, 150)
     $labelTip.Size = New-Object System.Drawing.Size(380, 56)
     $labelTip.ForeColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
 
+    $checkAutoStart.Add_CheckedChanged({
+        try {
+            Set-AutoStartEnabled $checkAutoStart.Checked
+            if ($checkAutoStart.Checked) {
+                $labelTip.Text = 'Silent startup enabled.'
+            } else {
+                $labelTip.Text = 'Silent startup disabled.'
+            }
+        } catch {
+            $labelTip.Text = 'Failed to update silent startup setting.'
+        }
+    })
+
+    $checkReconnect.Add_CheckedChanged({
+        try {
+            Set-ReconnectEnabled $checkReconnect.Checked
+            if ($checkReconnect.Checked) {
+                $labelTip.Text = 'Reconnect enabled.'
+            } else {
+                $labelTip.Text = 'Reconnect disabled.'
+            }
+        } catch {
+            $labelTip.Text = 'Failed to update reconnect setting.'
+        }
+    })
+
     $buttonLogin = New-Object System.Windows.Forms.Button
     $buttonLogin.Text = 'Login'
-    $buttonLogin.Location = New-Object System.Drawing.Point(245, 205)
+    $buttonLogin.Location = New-Object System.Drawing.Point(245, 245)
     $buttonLogin.Size = New-Object System.Drawing.Size(75, 30)
 
-    $buttonClose = New-Object System.Windows.Forms.Button
-    $buttonClose.Text = 'Close'
-    $buttonClose.Location = New-Object System.Drawing.Point(325, 205)
-    $buttonClose.Size = New-Object System.Drawing.Size(75, 30)
+    $buttonLogout = New-Object System.Windows.Forms.Button
+    $buttonLogout.Text = 'Logout'
+    $buttonLogout.Location = New-Object System.Drawing.Point(325, 245)
+    $buttonLogout.Size = New-Object System.Drawing.Size(75, 30)
 
-    $buttonClose.Add_Click({ $form.Close() })
+    $buttonLogout.Add_Click({
+        $u = $textUser.Text.Trim()
+        if (-not $u) {
+            $labelTip.Text = 'Please enter username before logout.'
+            return
+        }
+
+        $buttonLogin.Enabled = $false
+        $buttonLogout.Enabled = $false
+        $labelTip.Text = 'Logging out, please wait...'
+        $form.Refresh()
+
+        try {
+            $result = Invoke-LogoutAttempt $u
+            $labelTip.Text = $result.Message
+        } catch {
+            $labelTip.Text = 'Logout failed. Please try again.'
+        } finally {
+            $buttonLogin.Enabled = $true
+            $buttonLogout.Enabled = $true
+        }
+    })
 
     $buttonLogin.Add_Click({
         $u = $textUser.Text.Trim()
@@ -402,9 +564,8 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword) {
         }
     })
 
-    $form.Controls.AddRange(@($labelUser, $textUser, $labelPass, $textPass, $checkAutoStart, $labelTip, $buttonLogin, $buttonClose))
+    $form.Controls.AddRange(@($labelUser, $textUser, $labelPass, $textPass, $checkAutoStart, $checkReconnect, $labelTip, $buttonLogin, $buttonLogout))
     $form.AcceptButton = $buttonLogin
-    $form.CancelButton = $buttonClose
     [void]$form.ShowDialog()
 }
 
@@ -488,6 +649,23 @@ if ($Silent) {
 
     Start-InteractiveLoginWindow
     exit 1
+}
+
+if ($Reconnect) {
+    if (-not $defaultUsername -or -not $defaultPassword) {
+        Write-ResultFile 'needs_credentials' 'Login not configured' 'Please enter username and password once to enable reconnect.'
+        Start-InteractiveLoginWindow
+        exit 0
+    }
+
+    while ($true) {
+        $reconnectResult = Invoke-LoginAttempt $defaultUsername $defaultPassword $false
+        if (-not $reconnectResult.Success -and $reconnectResult.Status -eq 'failed_auth') {
+            Start-InteractiveLoginWindow
+            exit 1
+        }
+        Start-Sleep -Seconds ([Math]::Max(10, $ReconnectInterval))
+    }
 }
 
 Show-LoginWindow $defaultUsername $defaultPassword

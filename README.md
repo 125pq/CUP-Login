@@ -72,11 +72,14 @@ Installed user experience:
 - end users only need to download, install, and click the shortcut (no Rust toolchain required)
 - if no saved credential exists, a GUI dialog asks for username and password on first run
 - credentials are saved after successful login for future one-click use
+- the GUI includes a logout button and optional silent startup/reconnect toggles
 
 Runtime credential storage location (installed mode):
 
 - `%LOCALAPPDATA%\srun-cup\.login-cup.credential.json`
 - `%LOCALAPPDATA%\srun-cup\.login-cup.last-username`
+
+Silent startup and reconnect are stored in the current user's Windows startup settings and can be changed from the GUI.
 
 ## Script Behavior
 

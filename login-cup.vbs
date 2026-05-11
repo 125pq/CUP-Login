@@ -2,17 +2,22 @@ Option Explicit
 
 Dim shell, fso, scriptDir, ps1Path, stateRoot, resultPath, errorLogPath
 Dim cmd, i, arg, exitCode, windowStyle, statusText, titleText, messageText, detailText
-Dim runKey, runValueName, autostartCmd, silentMode, forceAutoStartMode
+Dim runKey, runValueName, reconnectRunValueName, legacyRunValueName, autostartCmd, reconnectCmd, silentMode, reconnectMode, forceAutoStartMode, forceReconnectMode
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 ps1Path = scriptDir & "\login-cup.ps1"
 stateRoot = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\srun-cup"
 runKey = "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\"
-runValueName = "srun-cup"
+runValueName = "CUP Login"
+reconnectRunValueName = "CUP Login Reconnect"
+legacyRunValueName = "srun-cup"
 autostartCmd = Chr(34) & "wscript.exe" & Chr(34) & " //B //Nologo " & Chr(34) & scriptDir & "\login-cup.vbs" & Chr(34) & " --silent"
+reconnectCmd = Chr(34) & "wscript.exe" & Chr(34) & " //B //Nologo " & Chr(34) & scriptDir & "\login-cup.vbs" & Chr(34) & " --reconnect"
 silentMode = False
+reconnectMode = False
 forceAutoStartMode = ""
+forceReconnectMode = ""
 
 cmd = QuoteArg("powershell.exe") & " -WindowStyle Hidden -STA -NoProfile -ExecutionPolicy Bypass -File " & QuoteArg(ps1Path)
 
@@ -21,10 +26,16 @@ For i = 0 To WScript.Arguments.Count - 1
     Select Case LCase(arg)
         Case "--silent", "/silent"
             silentMode = True
+        Case "--reconnect", "/reconnect"
+            reconnectMode = True
         Case "--set-autostart-on"
             forceAutoStartMode = "on"
         Case "--set-autostart-off"
             forceAutoStartMode = "off"
+        Case "--set-reconnect-on"
+            forceReconnectMode = "on"
+        Case "--set-reconnect-off"
+            forceReconnectMode = "off"
         Case Else
             cmd = cmd & " " & QuoteArg(arg)
     End Select
@@ -32,6 +43,10 @@ Next
 
 If silentMode Then
     cmd = cmd & " " & QuoteArg("-Silent")
+End If
+
+If reconnectMode Then
+    cmd = cmd & " " & QuoteArg("-Reconnect")
 End If
 
 If forceAutoStartMode = "on" Then
@@ -42,7 +57,15 @@ ElseIf forceAutoStartMode = "off" Then
     WScript.Quit 0
 End If
 
-If silentMode Then
+If forceReconnectMode = "on" Then
+    Call SetReconnect(True)
+    WScript.Quit 0
+ElseIf forceReconnectMode = "off" Then
+    Call SetReconnect(False)
+    WScript.Quit 0
+End If
+
+If silentMode Or reconnectMode Then
     windowStyle = 0
 Else
     windowStyle = 1
@@ -56,8 +79,29 @@ Sub SetAutoStart(enableIt)
     On Error Resume Next
     If enableIt Then
         shell.RegWrite runKey & runValueName, autostartCmd, "REG_SZ"
+        shell.RegDelete runKey & legacyRunValueName
+        If Err.Number <> 0 Then
+            Err.Clear
+        End If
     Else
         shell.RegDelete runKey & runValueName
+        If Err.Number <> 0 Then
+            Err.Clear
+        End If
+        shell.RegDelete runKey & legacyRunValueName
+        If Err.Number <> 0 Then
+            Err.Clear
+        End If
+    End If
+    On Error GoTo 0
+End Sub
+
+Sub SetReconnect(enableIt)
+    On Error Resume Next
+    If enableIt Then
+        shell.RegWrite runKey & reconnectRunValueName, reconnectCmd, "REG_SZ"
+    Else
+        shell.RegDelete runKey & reconnectRunValueName
         If Err.Number <> 0 Then
             Err.Clear
         End If

@@ -50,6 +50,8 @@ Name: "{autoprograms}\{#MyAppName}\Silent login"; Filename: "{app}\{#MyAppLaunch
 Name: "{autoprograms}\{#MyAppName}\Debug login"; Filename: "{app}\{#MyAppDebugName}"
 Name: "{autoprograms}\{#MyAppName}\Enable silent autostart"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-on"
 Name: "{autoprograms}\{#MyAppName}\Disable silent autostart"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-off"
+Name: "{autoprograms}\{#MyAppName}\Enable reconnect"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-reconnect-on"
+Name: "{autoprograms}\{#MyAppName}\Disable reconnect"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-reconnect-off"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Tasks: desktopicon
 Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--silent"; Tasks: autostart
 
@@ -59,6 +61,8 @@ Type: files; Name: "{autoprograms}\{#MyAppName}\One-click login.lnk"
 Type: files; Name: "{autoprograms}\srun-cup\Silent login.lnk"
 Type: files; Name: "{autoprograms}\srun-cup\One-click login.lnk"
 Type: dirifempty; Name: "{autoprograms}\srun-cup"
+Type: files; Name: "{userstartup}\CUP Login.lnk"
+Type: files; Name: "{userstartup}\srun-cup.lnk"
 
 [Run]
 Filename: "{app}\{#MyAppLauncherName}"; Description: "Run CUP Login now"; Flags: nowait postinstall skipifsilent shellexec
