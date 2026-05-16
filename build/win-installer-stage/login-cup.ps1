@@ -636,7 +636,6 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     $notifyIcon.Icon = [System.Drawing.SystemIcons]::Application
     $notifyIcon.Text = 'CUP Login'
     $notifyIcon.Visible = $true
-    $notifyIcon.ShowBalloonTip(1500, 'CUP Login', 'CUP Login is running in the system tray.', [System.Windows.Forms.ToolTipIcon]::Info)
 
     $trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
     $menuShow = New-Object System.Windows.Forms.ToolStripMenuItem('Show CUP Login')
@@ -712,10 +711,10 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         try {
             $result = Invoke-LogoutAttempt $u
             $labelTip.Text = $result.Message
-            if ($result.Success -and $checkReconnect.Checked -and $runReconnectCheck) {
-                $labelTip.Text = 'Logout succeeded. Checking portal redirect...'
-                $form.Refresh()
-                & $runReconnectCheck
+            if ($result.Success -and $checkReconnect.Checked) {
+                $checkReconnect.Checked = $false
+                Set-ReconnectEnabled $false
+                $labelTip.Text = 'Logout succeeded. Reconnect disabled.'
             }
         } catch {
             $labelTip.Text = 'Logout failed. Please try again.'
