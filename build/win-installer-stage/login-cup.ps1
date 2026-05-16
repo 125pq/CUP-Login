@@ -11,7 +11,7 @@ param(
     [switch]$Silent,
     [switch]$Reconnect,
     [switch]$Tray,
-    [int]$ReconnectInterval = 300,
+    [int]$ReconnectInterval = 10,
     [switch]$DetectIp = $true,
     [string]$BuildMode = 'auto'
 )
@@ -519,20 +519,15 @@ function Test-CaptivePortalEndpoint([string]$url, [int]$expectedStatus, [string]
     }
 }
 
-function Test-InternetConnectivity {
+function Test-CaptivePortalRedirect {
     $checks = @(
-        @{ Url = 'http://connect.rom.miui.com/generate_204'; Status = 204; Body = '' },
-        @{ Url = 'http://connectivitycheck.gstatic.com/generate_204'; Status = 204; Body = '' },
-        @{ Url = 'http://www.msftconnecttest.com/connecttest.txt'; Status = 200; Body = 'Microsoft Connect Test' }
+        @{ Url = 'http://connect.rom.miui.com/generate_204'; Status = 204; Body = '' }
     )
 
     foreach ($check in $checks) {
         $result = Test-CaptivePortalEndpoint $check.Url $check.Status $check.Body
-        if ($result.Online) {
-            return $true
-        }
         if ($result.Redirected) {
-            return $false
+            return $true
         }
     }
 
@@ -559,12 +554,12 @@ function Clear-ReconnectNetworkEvents {
 }
 
 function Invoke-ReconnectLoginIfNeeded([string]$inputUsername, [string]$inputPassword) {
-    if (Test-InternetConnectivity) {
-        Write-ResultFile 'online' 'Network online' 'Connectivity check passed.'
+    if (-not (Test-CaptivePortalRedirect)) {
+        Write-ResultFile 'online' 'Portal check passed' 'No captive portal redirect detected.'
         return $true
     }
 
-    Write-ResultFile 'reconnecting' 'Reconnect running' 'Connectivity check failed or portal redirect detected.'
+    Write-ResultFile 'reconnecting' 'Reconnect running' 'Captive portal redirect detected.'
     $reconnectResult = Invoke-LoginAttempt $inputUsername $inputPassword $false
     if (-not $reconnectResult.Success -and $reconnectResult.Status -eq 'failed_auth') {
         Start-InteractiveLoginWindow
@@ -581,7 +576,9 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     } catch {
         throw
     }
+    [System.Windows.Forms.Application]::EnableVisualStyles()
 
+    $appContext = New-Object System.Windows.Forms.ApplicationContext
     $form = New-Object System.Windows.Forms.Form
     $form.Text = 'CUP Login'
     $form.StartPosition = 'CenterScreen'
@@ -650,6 +647,9 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     [void]$trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
     [void]$trayMenu.Items.Add($menuExit)
     $notifyIcon.ContextMenuStrip = $trayMenu
+    $script:cupLoginNotifyIcon = $notifyIcon
+    $script:cupLoginTrayMenu = $trayMenu
+    $script:cupLoginForm = $form
 
     $showWindow = {
         $form.Show()
@@ -695,6 +695,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     $buttonLogout.Text = 'Logout'
     $buttonLogout.Location = New-Object System.Drawing.Point(325, 245)
     $buttonLogout.Size = New-Object System.Drawing.Size(75, 30)
+    $runReconnectCheck = $null
 
     $buttonLogout.Add_Click({
         $u = $textUser.Text.Trim()
@@ -711,6 +712,11 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         try {
             $result = Invoke-LogoutAttempt $u
             $labelTip.Text = $result.Message
+            if ($result.Success -and $checkReconnect.Checked -and $runReconnectCheck) {
+                $labelTip.Text = 'Logout succeeded. Checking portal redirect...'
+                $form.Refresh()
+                & $runReconnectCheck
+            }
         } catch {
             $labelTip.Text = 'Logout failed. Please try again.'
         } finally {
@@ -777,8 +783,8 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
 
         $reconnectBusy = $true
         try {
-            if (-not (Test-InternetConnectivity)) {
-                $labelTip.Text = 'Connectivity check failed. Reconnecting...'
+            if (Test-CaptivePortalRedirect) {
+                $labelTip.Text = 'Portal redirect detected. Reconnecting...'
                 $result = Invoke-LoginAttempt $u $p $false
                 $labelTip.Text = $result.Message
                 if (-not $result.Success -and $result.Status -eq 'failed_auth') {
@@ -788,7 +794,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         } catch {
             $labelTip.Text = 'Reconnect check failed.'
         } finally {
-            $script:lastReconnectCheck = [DateTime]::Now
+            $script:cupLoginLastReconnectCheck = [DateTime]::Now
             $reconnectBusy = $false
         }
     }
@@ -807,7 +813,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
             }
         }
 
-        $dueFallback = (([DateTime]::Now - $script:cupLoginLastReconnectCheck).TotalSeconds -ge [Math]::Max(60, $ReconnectInterval))
+        $dueFallback = (([DateTime]::Now - $script:cupLoginLastReconnectCheck).TotalSeconds -ge [Math]::Max(5, $ReconnectInterval))
         if ($hasNetworkEvent -or $dueFallback) {
             & $runReconnectCheck
         }
@@ -828,6 +834,8 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         Clear-ReconnectNetworkEvents
         $notifyIcon.Visible = $false
         $notifyIcon.Dispose()
+        $trayMenu.Dispose()
+        $appContext.ExitThread()
     })
 
     $menuExit.Add_Click({
@@ -837,15 +845,14 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
 
     $form.Controls.AddRange(@($labelUser, $textUser, $labelPass, $textPass, $checkAutoStart, $checkReconnect, $labelTip, $buttonLogin, $buttonLogout))
     $form.AcceptButton = $buttonLogin
-    $form.Add_Shown({
-        if ($startInTray) {
-            $form.Hide()
-            if ($checkReconnect.Checked) {
-                & $runReconnectCheck
-            }
+    if ($startInTray) {
+        if ($checkReconnect.Checked) {
+            & $runReconnectCheck
         }
-    })
-    [void]$form.ShowDialog()
+    } else {
+        [void]$form.Show()
+    }
+    [System.Windows.Forms.Application]::Run($appContext)
 }
 
 function Get-SrunExe {
@@ -960,12 +967,12 @@ if ($Reconnect) {
 
         while ($true) {
             if ($eventsRegistered) {
-                $event = Wait-Event -Timeout ([Math]::Max(60, $ReconnectInterval))
+                $event = Wait-Event -Timeout ([Math]::Max(5, $ReconnectInterval))
                 if ($event) {
                     Get-Event | Remove-Event
                 }
             } else {
-                Start-Sleep -Seconds ([Math]::Max(60, $ReconnectInterval))
+                Start-Sleep -Seconds ([Math]::Max(5, $ReconnectInterval))
             }
 
             if (-not (Invoke-ReconnectLoginIfNeeded $defaultUsername $defaultPassword)) {
