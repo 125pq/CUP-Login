@@ -72,7 +72,7 @@ Installed user experience:
 - end users only need to download, install, and click the shortcut (no Rust toolchain required)
 - if no saved credential exists, a GUI dialog asks for username and password on first run
 - credentials are saved after successful login for future one-click use
-- the GUI includes a logout button and optional silent startup/reconnect toggles
+- the GUI includes a logout button, backup account management, and optional silent startup/reconnect toggles
 
 Runtime credential storage location (installed mode):
 
@@ -80,6 +80,8 @@ Runtime credential storage location (installed mode):
 - `%LOCALAPPDATA%\srun-cup\.login-cup.last-username`
 
 Silent startup and reconnect are stored in the current user's Windows startup settings and can be changed from the GUI. Closing the window keeps CUP Login running in the system tray; use the tray menu to show the window or exit. Reconnect mode keeps the tray process alive and retries login only when the lightweight HTTP captive-portal check is redirected.
+
+Backup accounts are configured from the `Backup accounts...` button. CUP Login always tries the main account first; if it fails, backup accounts are tried in order without replacing the main account shown on the next launch.
 
 ## Script Behavior
 

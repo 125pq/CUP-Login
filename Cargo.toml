@@ -1,6 +1,6 @@
 [package]
 name = "srun"
-version = "0.8.8"
+version = "0.8.9"
 authors = ["zu1k <i@zu1k.com>"]
 edition = "2024"
 description = "Srun authentication system login tools"

@@ -25,6 +25,8 @@ if ($null -ne (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Error
 $stateRoot = Join-Path $env:LOCALAPPDATA 'srun-cup'
 $lastUsernameFile = Join-Path $stateRoot '.login-cup.last-username'
 $savedCredentialFile = Join-Path $stateRoot '.login-cup.credential.json'
+$backupCredentialFile = Join-Path $stateRoot '.login-cup.backup-credentials.json'
+$activeLoginFile = Join-Path $stateRoot '.login-cup.active-login.json'
 $autoStartFlagFile = Join-Path $stateRoot 'silent-startup.enabled'
 $reconnectFlagFile = Join-Path $stateRoot 'reconnect.enabled'
 $lastResultFile = Join-Path $stateRoot 'login-last-result.txt'
@@ -106,6 +108,29 @@ function Get-LastUsername {
     return ''
 }
 
+function Protect-LoginText([string]$value) {
+    if ($null -eq $value) {
+        $value = ''
+    }
+
+    $secure = ConvertTo-SecureString $value -AsPlainText -Force
+    return ($secure | ConvertFrom-SecureString)
+}
+
+function Unprotect-LoginText([string]$value) {
+    if (-not $value) {
+        return ''
+    }
+
+    $secure = $value | ConvertTo-SecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try {
+        return [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+}
+
 function Save-LastUsername([string]$value) {
     if (-not $value) {
         return
@@ -125,17 +150,9 @@ function Get-SavedCredential {
             return $null
         }
 
-        $secure = $obj.password | ConvertTo-SecureString
-        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-        try {
-            $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-        } finally {
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-        }
-
         return @{
             Username = [string]$obj.username
-            Password = [string]$plain
+            Password = [string](Unprotect-LoginText ([string]$obj.password))
         }
     } catch {
         return $null
@@ -147,11 +164,9 @@ function Save-SavedCredential([string]$username, [string]$password) {
         return
     }
 
-    $secure = ConvertTo-SecureString $password -AsPlainText -Force
-    $encrypted = $secure | ConvertFrom-SecureString
     $payload = @{
         username = $username
-        password = $encrypted
+        password = Protect-LoginText $password
     } | ConvertTo-Json
 
     Set-Content -Path $savedCredentialFile -Value $payload -Encoding ascii
@@ -159,6 +174,89 @@ function Save-SavedCredential([string]$username, [string]$password) {
 
 function Clear-SavedCredential {
     Remove-Item -Path $savedCredentialFile -ErrorAction SilentlyContinue
+}
+
+function Get-BackupCredentials {
+    $accounts = @()
+    if (-not (Test-Path $backupCredentialFile)) {
+        return $accounts
+    }
+
+    try {
+        $raw = Get-Content $backupCredentialFile -Raw -ErrorAction Stop
+        $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+        foreach ($item in @($obj.accounts)) {
+            if (-not $item.username -or -not $item.password) {
+                continue
+            }
+
+            $accounts += [pscustomobject]@{
+                Username = [string]$item.username
+                Password = [string](Unprotect-LoginText ([string]$item.password))
+            }
+        }
+    } catch {
+        return @()
+    }
+
+    return $accounts
+}
+
+function Save-BackupCredentials([object[]]$accounts) {
+    $payloadAccounts = @()
+    foreach ($account in @($accounts)) {
+        if (-not $account.Username -or -not $account.Password) {
+            continue
+        }
+
+        $payloadAccounts += [pscustomobject]@{
+            username = [string]$account.Username
+            password = Protect-LoginText ([string]$account.Password)
+        }
+    }
+
+    $payload = @{
+        accounts = $payloadAccounts
+    } | ConvertTo-Json -Depth 4
+    Set-Content -Path $backupCredentialFile -Value $payload -Encoding ascii
+}
+
+function Set-ActiveLogin([string]$username, [string]$label) {
+    if (-not $username) {
+        return
+    }
+
+    $payload = @{
+        username = $username
+        label = if ($label) { $label } else { 'Main account' }
+        time = [DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss')
+    } | ConvertTo-Json
+    Set-Content -Path $activeLoginFile -Value $payload -Encoding ascii
+}
+
+function Get-ActiveLogin {
+    if (-not (Test-Path $activeLoginFile)) {
+        return $null
+    }
+
+    try {
+        $raw = Get-Content $activeLoginFile -Raw -ErrorAction Stop
+        $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+        if (-not $obj.username) {
+            return $null
+        }
+
+        return @{
+            Username = [string]$obj.username
+            Label = if ($obj.label) { [string]$obj.label } else { 'Main account' }
+        }
+    } catch {
+        return $null
+    }
+}
+
+function Clear-ActiveLogin {
+    Remove-Item -Path $activeLoginFile -ErrorAction SilentlyContinue
 }
 
 function Get-AutoStartCommand {
@@ -260,7 +358,7 @@ function Resolve-ServerCandidates {
     return @('https://login.cup.edu.cn', 'http://login.cup.edu.cn')
 }
 
-function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bool]$clearCredentialOnFailure = $true) {
+function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bool]$clearCredentialOnFailure = $true, [bool]$saveCredentialOnSuccess = $true, [string]$accountLabel = 'Main account') {
     $usernameCandidates = Resolve-UsernameCandidates $inputUsername
     $servers = Resolve-ServerCandidates
     $srunExe = Get-SrunExe
@@ -323,13 +421,18 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
                     } else {
                         Write-ResultFile 'success' 'Login succeeded' 'Login succeeded!'
                     }
-                    Save-LastUsername $usernameCandidate
-                    Save-SavedCredential $usernameCandidate $inputPassword
+                    if ($saveCredentialOnSuccess) {
+                        Save-LastUsername $usernameCandidate
+                        Save-SavedCredential $usernameCandidate $inputPassword
+                    }
+                    Set-ActiveLogin $usernameCandidate $accountLabel
 
                     return @{
                         Success = $true
                         Status = if ($alreadyOnline) { 'already_online' } else { 'success' }
                         Message = if ($alreadyOnline) { 'Already online.' } else { 'Login succeeded!' }
+                        Username = $usernameCandidate
+                        AccountLabel = $accountLabel
                     }
                 }
 
@@ -377,9 +480,52 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
             Success = $false
             Status = $lastFailureStatus
             Message = $failureMessage
+            Username = $inputUsername
+            AccountLabel = $accountLabel
         }
     } finally {
         Pop-Location
+    }
+}
+
+function Invoke-LoginWithBackupAccounts([string]$inputUsername, [string]$inputPassword, [bool]$clearCredentialOnFailure = $true) {
+    $mainResult = Invoke-LoginAttempt $inputUsername $inputPassword $false $true 'Main account'
+    if ($mainResult.Success) {
+        return $mainResult
+    }
+
+    $backupAccounts = @(Get-BackupCredentials)
+    if ($backupAccounts.Count -eq 0) {
+        return $mainResult
+    }
+
+    $backupIndex = 0
+    foreach ($backup in $backupAccounts) {
+        $backupIndex += 1
+        if (-not $backup.Username -or -not $backup.Password) {
+            continue
+        }
+
+        $backupLabel = "Backup account $backupIndex"
+        Write-ResultFile 'backup_running' 'Backup login running' "Trying $backupLabel..."
+        $backupResult = Invoke-LoginAttempt ([string]$backup.Username) ([string]$backup.Password) $false $false $backupLabel
+        if ($backupResult.Success) {
+            Save-LastUsername $inputUsername
+            Save-SavedCredential $inputUsername $inputPassword
+            $backupResult['Status'] = 'backup_success'
+            $backupResult['Message'] = "Main account failed. Signed in with $backupLabel."
+            Write-ResultFile 'backup_success' 'Backup login succeeded' $backupResult['Message']
+            return $backupResult
+        }
+    }
+
+    Write-ResultFile 'failed' 'Login failed' 'Main account and backup accounts all failed.'
+    return @{
+        Success = $false
+        Status = 'failed'
+        Message = 'Main account and backup accounts all failed.'
+        Username = $inputUsername
+        AccountLabel = 'Main account'
     }
 }
 
@@ -560,13 +706,228 @@ function Invoke-ReconnectLoginIfNeeded([string]$inputUsername, [string]$inputPas
     }
 
     Write-ResultFile 'reconnecting' 'Reconnect running' 'Captive portal redirect detected.'
-    $reconnectResult = Invoke-LoginAttempt $inputUsername $inputPassword $false
+    $reconnectResult = Invoke-LoginWithBackupAccounts $inputUsername $inputPassword $false
     if (-not $reconnectResult.Success -and $reconnectResult.Status -eq 'failed_auth') {
         Start-InteractiveLoginWindow
         return $false
     }
 
     return $true
+}
+
+function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = 'Backup accounts'
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ClientSize = New-Object System.Drawing.Size(480, 310)
+
+    $accounts = New-Object System.Collections.ArrayList
+    foreach ($account in @(Get-BackupCredentials)) {
+        [void]$accounts.Add([pscustomobject]@{
+            Username = [string]$account.Username
+            Password = [string]$account.Password
+        })
+    }
+
+    $listAccounts = New-Object System.Windows.Forms.ListBox
+    $listAccounts.Location = New-Object System.Drawing.Point(15, 15)
+    $listAccounts.Size = New-Object System.Drawing.Size(190, 225)
+
+    $labelBackupUser = New-Object System.Windows.Forms.Label
+    $labelBackupUser.Text = 'Username'
+    $labelBackupUser.Location = New-Object System.Drawing.Point(225, 20)
+    $labelBackupUser.AutoSize = $true
+
+    $textBackupUser = New-Object System.Windows.Forms.TextBox
+    $textBackupUser.Location = New-Object System.Drawing.Point(305, 18)
+    $textBackupUser.Size = New-Object System.Drawing.Size(150, 20)
+
+    $labelBackupPass = New-Object System.Windows.Forms.Label
+    $labelBackupPass.Text = 'Password'
+    $labelBackupPass.Location = New-Object System.Drawing.Point(225, 58)
+    $labelBackupPass.AutoSize = $true
+
+    $textBackupPass = New-Object System.Windows.Forms.TextBox
+    $textBackupPass.Location = New-Object System.Drawing.Point(305, 56)
+    $textBackupPass.Size = New-Object System.Drawing.Size(150, 20)
+    $textBackupPass.UseSystemPasswordChar = $true
+
+    $labelBackupTip = New-Object System.Windows.Forms.Label
+    $labelBackupTip.Text = 'Backup accounts are tried only after the main account fails.'
+    $labelBackupTip.Location = New-Object System.Drawing.Point(225, 92)
+    $labelBackupTip.Size = New-Object System.Drawing.Size(230, 42)
+
+    $buttonAdd = New-Object System.Windows.Forms.Button
+    $buttonAdd.Text = 'Add'
+    $buttonAdd.Location = New-Object System.Drawing.Point(225, 145)
+    $buttonAdd.Size = New-Object System.Drawing.Size(70, 28)
+
+    $buttonUpdate = New-Object System.Windows.Forms.Button
+    $buttonUpdate.Text = 'Update'
+    $buttonUpdate.Location = New-Object System.Drawing.Point(305, 145)
+    $buttonUpdate.Size = New-Object System.Drawing.Size(70, 28)
+
+    $buttonDelete = New-Object System.Windows.Forms.Button
+    $buttonDelete.Text = 'Delete'
+    $buttonDelete.Location = New-Object System.Drawing.Point(385, 145)
+    $buttonDelete.Size = New-Object System.Drawing.Size(70, 28)
+
+    $buttonUp = New-Object System.Windows.Forms.Button
+    $buttonUp.Text = 'Up'
+    $buttonUp.Location = New-Object System.Drawing.Point(225, 185)
+    $buttonUp.Size = New-Object System.Drawing.Size(70, 28)
+
+    $buttonDown = New-Object System.Windows.Forms.Button
+    $buttonDown.Text = 'Down'
+    $buttonDown.Location = New-Object System.Drawing.Point(305, 185)
+    $buttonDown.Size = New-Object System.Drawing.Size(70, 28)
+
+    $buttonSave = New-Object System.Windows.Forms.Button
+    $buttonSave.Text = 'Save'
+    $buttonSave.Location = New-Object System.Drawing.Point(300, 260)
+    $buttonSave.Size = New-Object System.Drawing.Size(75, 30)
+
+    $buttonCancel = New-Object System.Windows.Forms.Button
+    $buttonCancel.Text = 'Cancel'
+    $buttonCancel.Location = New-Object System.Drawing.Point(385, 260)
+    $buttonCancel.Size = New-Object System.Drawing.Size(75, 30)
+
+    $refreshList = {
+        $previousIndex = $listAccounts.SelectedIndex
+        $listAccounts.Items.Clear()
+        for ($i = 0; $i -lt $accounts.Count; $i++) {
+            $name = [string]$accounts[$i].Username
+            if (-not $name) {
+                $name = '(empty username)'
+            }
+            [void]$listAccounts.Items.Add(("{0}. {1}" -f ($i + 1), $name))
+        }
+
+        if ($accounts.Count -gt 0) {
+            if ($previousIndex -lt 0) {
+                $previousIndex = 0
+            }
+            if ($previousIndex -ge $accounts.Count) {
+                $previousIndex = $accounts.Count - 1
+            }
+            $listAccounts.SelectedIndex = $previousIndex
+        } else {
+            $textBackupUser.Text = ''
+            $textBackupPass.Text = ''
+        }
+    }
+
+    $loadSelected = {
+        $index = $listAccounts.SelectedIndex
+        if ($index -lt 0 -or $index -ge $accounts.Count) {
+            return
+        }
+        $textBackupUser.Text = [string]$accounts[$index].Username
+        $textBackupPass.Text = [string]$accounts[$index].Password
+    }
+
+    $listAccounts.Add_SelectedIndexChanged($loadSelected)
+
+    $buttonAdd.Add_Click({
+        $u = $textBackupUser.Text.Trim()
+        $p = $textBackupPass.Text
+        if (-not $u -or -not $p) {
+            $labelBackupTip.Text = 'Please enter username and password.'
+            return
+        }
+
+        [void]$accounts.Add([pscustomobject]@{
+            Username = $u
+            Password = $p
+        })
+        & $refreshList
+        $listAccounts.SelectedIndex = $accounts.Count - 1
+        $labelBackupTip.Text = 'Backup account added.'
+    })
+
+    $buttonUpdate.Add_Click({
+        $index = $listAccounts.SelectedIndex
+        if ($index -lt 0 -or $index -ge $accounts.Count) {
+            $labelBackupTip.Text = 'Select a backup account first.'
+            return
+        }
+
+        $u = $textBackupUser.Text.Trim()
+        $p = $textBackupPass.Text
+        if (-not $u -or -not $p) {
+            $labelBackupTip.Text = 'Please enter username and password.'
+            return
+        }
+
+        $accounts[$index] = [pscustomobject]@{
+            Username = $u
+            Password = $p
+        }
+        & $refreshList
+        $listAccounts.SelectedIndex = $index
+        $labelBackupTip.Text = 'Backup account updated.'
+    })
+
+    $buttonDelete.Add_Click({
+        $index = $listAccounts.SelectedIndex
+        if ($index -lt 0 -or $index -ge $accounts.Count) {
+            return
+        }
+
+        $accounts.RemoveAt($index)
+        & $refreshList
+        $labelBackupTip.Text = 'Backup account deleted.'
+    })
+
+    $buttonUp.Add_Click({
+        $index = $listAccounts.SelectedIndex
+        if ($index -le 0) {
+            return
+        }
+
+        $item = $accounts[$index]
+        $accounts.RemoveAt($index)
+        $accounts.Insert($index - 1, $item)
+        & $refreshList
+        $listAccounts.SelectedIndex = $index - 1
+    })
+
+    $buttonDown.Add_Click({
+        $index = $listAccounts.SelectedIndex
+        if ($index -lt 0 -or $index -ge ($accounts.Count - 1)) {
+            return
+        }
+
+        $item = $accounts[$index]
+        $accounts.RemoveAt($index)
+        $accounts.Insert($index + 1, $item)
+        & $refreshList
+        $listAccounts.SelectedIndex = $index + 1
+    })
+
+    $buttonSave.Add_Click({
+        $toSave = @()
+        foreach ($account in $accounts) {
+            $toSave += $account
+        }
+        Save-BackupCredentials $toSave
+        $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $dialog.Close()
+    })
+
+    $buttonCancel.Add_Click({
+        $dialog.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $dialog.Close()
+    })
+
+    $dialog.Controls.AddRange(@($listAccounts, $labelBackupUser, $textBackupUser, $labelBackupPass, $textBackupPass, $labelBackupTip, $buttonAdd, $buttonUpdate, $buttonDelete, $buttonUp, $buttonDown, $buttonSave, $buttonCancel))
+    $dialog.AcceptButton = $buttonSave
+    $dialog.CancelButton = $buttonCancel
+    & $refreshList
+    [void]$dialog.ShowDialog($owner)
 }
 
 function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [bool]$startInTray = $false) {
@@ -632,6 +993,21 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     $labelTip.Size = New-Object System.Drawing.Size(380, 56)
     $labelTip.ForeColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
 
+    $labelActive = New-Object System.Windows.Forms.Label
+    $labelActive.Location = New-Object System.Drawing.Point(20, 212)
+    $labelActive.Size = New-Object System.Drawing.Size(380, 20)
+    $labelActive.ForeColor = [System.Drawing.Color]::FromArgb(90, 90, 90)
+
+    $updateActiveLabel = {
+        $active = Get-ActiveLogin
+        if ($active -and $active.Username) {
+            $labelActive.Text = "Current login: $($active.Label) ($($active.Username))"
+        } else {
+            $labelActive.Text = ''
+        }
+    }
+    & $updateActiveLabel
+
     $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
     $notifyIcon.Icon = [System.Drawing.SystemIcons]::Application
     $notifyIcon.Text = 'CUP Login'
@@ -694,10 +1070,16 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     $buttonLogout.Text = 'Logout'
     $buttonLogout.Location = New-Object System.Drawing.Point(325, 245)
     $buttonLogout.Size = New-Object System.Drawing.Size(75, 30)
+
+    $buttonBackup = New-Object System.Windows.Forms.Button
+    $buttonBackup.Text = 'Backup accounts...'
+    $buttonBackup.Location = New-Object System.Drawing.Point(20, 245)
+    $buttonBackup.Size = New-Object System.Drawing.Size(140, 30)
     $runReconnectCheck = $null
 
     $buttonLogout.Add_Click({
-        $u = $textUser.Text.Trim()
+        $active = Get-ActiveLogin
+        $u = if ($active -and $active.Username) { [string]$active.Username } else { $textUser.Text.Trim() }
         if (-not $u) {
             $labelTip.Text = 'Please enter username before logout.'
             return
@@ -711,10 +1093,14 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         try {
             $result = Invoke-LogoutAttempt $u
             $labelTip.Text = $result.Message
-            if ($result.Success -and $checkReconnect.Checked) {
-                $checkReconnect.Checked = $false
-                Set-ReconnectEnabled $false
-                $labelTip.Text = 'Logout succeeded. Reconnect disabled.'
+            if ($result.Success) {
+                Clear-ActiveLogin
+                & $updateActiveLabel
+                if ($checkReconnect.Checked) {
+                    $checkReconnect.Checked = $false
+                    Set-ReconnectEnabled $false
+                    $labelTip.Text = 'Logout succeeded. Reconnect disabled.'
+                }
             }
         } catch {
             $labelTip.Text = 'Logout failed. Please try again.'
@@ -740,9 +1126,10 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         $form.Refresh()
 
         try {
-            $result = Invoke-LoginAttempt $u $p
+            $result = Invoke-LoginWithBackupAccounts $u $p
             if ($result.Success) {
                 $labelTip.Text = $result.Message
+                & $updateActiveLabel
             } else {
                 $labelTip.Text = $result.Message
                 $textPass.Text = ''
@@ -754,6 +1141,18 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
             $textPass.Focus()
         } finally {
             $buttonLogin.Enabled = $true
+        }
+    })
+
+    $buttonBackup.Add_Click({
+        Show-BackupAccountsWindow $form
+        $backupCount = @(Get-BackupCredentials).Count
+        if ($backupCount -eq 0) {
+            $labelTip.Text = 'No backup accounts configured.'
+        } elseif ($backupCount -eq 1) {
+            $labelTip.Text = '1 backup account configured.'
+        } else {
+            $labelTip.Text = "$backupCount backup accounts configured."
         }
     })
 
@@ -784,8 +1183,11 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         try {
             if (Test-CaptivePortalRedirect) {
                 $labelTip.Text = 'Portal redirect detected. Reconnecting...'
-                $result = Invoke-LoginAttempt $u $p $false
+                $result = Invoke-LoginWithBackupAccounts $u $p $false
                 $labelTip.Text = $result.Message
+                if ($result.Success) {
+                    & $updateActiveLabel
+                }
                 if (-not $result.Success -and $result.Status -eq 'failed_auth') {
                     & $showWindow
                 }
@@ -841,7 +1243,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         $form.Close()
     })
 
-    $form.Controls.AddRange(@($labelUser, $textUser, $labelPass, $textPass, $checkAutoStart, $checkReconnect, $labelTip, $buttonLogin, $buttonLogout))
+    $form.Controls.AddRange(@($labelUser, $textUser, $labelPass, $textPass, $checkAutoStart, $checkReconnect, $labelTip, $labelActive, $buttonBackup, $buttonLogin, $buttonLogout))
     $form.AcceptButton = $buttonLogin
     if ($startInTray) {
         if ($checkReconnect.Checked) {
@@ -924,7 +1326,7 @@ Update-TrayStartupEntry
 if ($Tray) {
     $startInTray = ($defaultUsername -and $defaultPassword)
     if ($startInTray -and (Get-AutoStartEnabled)) {
-        $silentResult = Invoke-LoginAttempt $defaultUsername $defaultPassword $false
+        $silentResult = Invoke-LoginWithBackupAccounts $defaultUsername $defaultPassword $false
         if (-not $silentResult.Success) {
             $startInTray = $false
         }
@@ -941,7 +1343,7 @@ if ($Silent) {
         exit 0
     }
 
-    $silentResult = Invoke-LoginAttempt $defaultUsername $defaultPassword
+    $silentResult = Invoke-LoginWithBackupAccounts $defaultUsername $defaultPassword
     if ($silentResult.Success) {
         exit 0
     }
