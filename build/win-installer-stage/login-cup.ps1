@@ -10,7 +10,8 @@ param(
     [int]$RetryDelay = 100,
     [switch]$Silent,
     [switch]$Reconnect,
-    [int]$ReconnectInterval = 60,
+    [switch]$Tray,
+    [int]$ReconnectInterval = 300,
     [switch]$DetectIp = $true,
     [string]$BuildMode = 'auto'
 )
@@ -24,6 +25,8 @@ if ($null -ne (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Error
 $stateRoot = Join-Path $env:LOCALAPPDATA 'srun-cup'
 $lastUsernameFile = Join-Path $stateRoot '.login-cup.last-username'
 $savedCredentialFile = Join-Path $stateRoot '.login-cup.credential.json'
+$autoStartFlagFile = Join-Path $stateRoot 'silent-startup.enabled'
+$reconnectFlagFile = Join-Path $stateRoot 'reconnect.enabled'
 $lastResultFile = Join-Path $stateRoot 'login-last-result.txt'
 $lastErrorLogFile = Join-Path $stateRoot 'login-last-error.log'
 
@@ -65,10 +68,19 @@ function Get-LoginHintText {
     $status = Get-ResultField 'status'
     switch ($status) {
         'failed_auth' { return 'Username or password is incorrect. Please retry.' }
+        'failed_proxy' { return 'Close proxy/VPN first, then retry CUP Login.' }
         'failed' { return 'Last login failed. Check network/settings and retry.' }
         'needs_credentials' { return 'Enter username and password once to enable CUP Login.' }
         default { return 'Credentials are saved locally after successful login.' }
     }
+}
+
+function Test-ProxyOrVpnPortalError([string]$text) {
+    if (-not $text) {
+        return $false
+    }
+
+    return ($text -match 'Unexpected EOF|unexpectedly closed|connection.*closed|WebException|Network Error')
 }
 
 function Get-LastPortalResponseBlock([string]$text) {
@@ -150,14 +162,18 @@ function Clear-SavedCredential {
 }
 
 function Get-AutoStartCommand {
-    return '"wscript.exe" //B //Nologo "' + (Join-Path $PSScriptRoot 'login-cup.vbs') + '" --silent'
+    return '"wscript.exe" //B //Nologo "' + (Join-Path $PSScriptRoot 'login-cup.vbs') + '" --tray'
 }
 
 function Get-ReconnectCommand {
-    return '"wscript.exe" //B //Nologo "' + (Join-Path $PSScriptRoot 'login-cup.vbs') + '" --reconnect'
+    return '"wscript.exe" //B //Nologo "' + (Join-Path $PSScriptRoot 'login-cup.vbs') + '" --tray'
 }
 
 function Get-AutoStartEnabled {
+    if (Test-Path $autoStartFlagFile) {
+        return $true
+    }
+
     $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'CUP Login.lnk'
 
@@ -178,44 +194,47 @@ function Get-AutoStartEnabled {
     }
 }
 
-function Set-AutoStartEnabled([bool]$enabled) {
+function Update-TrayStartupEntry {
     $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'CUP Login.lnk'
     $legacyStartupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'srun-cup.lnk'
     $cmd = Get-AutoStartCommand
+    $enabled = (Test-Path $autoStartFlagFile) -or (Test-Path $reconnectFlagFile)
 
     if ($enabled) {
         New-Item -Path $runPath -Force | Out-Null
         Set-ItemProperty -Path $runPath -Name 'CUP Login' -Value $cmd
+        Remove-ItemProperty -Path $runPath -Name 'CUP Login Reconnect' -ErrorAction SilentlyContinue
         Remove-ItemProperty -Path $runPath -Name 'srun-cup' -ErrorAction SilentlyContinue
     } else {
         Remove-ItemProperty -Path $runPath -Name 'CUP Login' -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path $runPath -Name 'CUP Login Reconnect' -ErrorAction SilentlyContinue
         Remove-ItemProperty -Path $runPath -Name 'srun-cup' -ErrorAction SilentlyContinue
         Remove-Item -Path $startupShortcut -ErrorAction SilentlyContinue
         Remove-Item -Path $legacyStartupShortcut -ErrorAction SilentlyContinue
     }
 }
 
-function Get-ReconnectEnabled {
-    $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-    try {
-        $value = (Get-ItemProperty -Path $runPath -Name 'CUP Login Reconnect' -ErrorAction Stop).'CUP Login Reconnect'
-        return ($value -and $value -match 'login-cup\.vbs')
-    } catch {
-        return $false
+function Set-AutoStartEnabled([bool]$enabled) {
+    if ($enabled) {
+        Set-Content -Path $autoStartFlagFile -Value 'enabled' -Encoding ascii
+    } else {
+        Remove-Item -Path $autoStartFlagFile -ErrorAction SilentlyContinue
     }
+    Update-TrayStartupEntry
+}
+
+function Get-ReconnectEnabled {
+    return (Test-Path $reconnectFlagFile)
 }
 
 function Set-ReconnectEnabled([bool]$enabled) {
-    $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-    $cmd = Get-ReconnectCommand
-
     if ($enabled) {
-        New-Item -Path $runPath -Force | Out-Null
-        Set-ItemProperty -Path $runPath -Name 'CUP Login Reconnect' -Value $cmd
+        Set-Content -Path $reconnectFlagFile -Value 'enabled' -Encoding ascii
     } else {
-        Remove-ItemProperty -Path $runPath -Name 'CUP Login Reconnect' -ErrorAction SilentlyContinue
+        Remove-Item -Path $reconnectFlagFile -ErrorAction SilentlyContinue
     }
+    Update-TrayStartupEntry
 }
 
 function Resolve-UsernameCandidates([string]$rawUsername) {
@@ -317,7 +336,10 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
                 $lastError = $text
                 Write-ErrorLog $text
 
-                if ($text -match 'Authentication fail|login_error|Unknow ac-type') {
+                if (Test-ProxyOrVpnPortalError $text) {
+                    $lastFailureStatus = 'failed_proxy'
+                    $lastFailureMessage = 'Close proxy/VPN first, then retry CUP Login.'
+                } elseif ($text -match 'Authentication fail|login_error|Unknow ac-type') {
                     $lastFailureStatus = 'failed_auth'
                     $lastFailureMessage = 'Username or password is incorrect.'
                 } else {
@@ -344,10 +366,17 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
         }
         Write-ResultFile $lastFailureStatus 'Login failed' $lastFailureMessage
 
+        $failureMessage = 'Login failed. Check network and retry.'
+        if ($lastFailureStatus -eq 'failed_auth') {
+            $failureMessage = 'Username or password is incorrect. Please retry.'
+        } elseif ($lastFailureStatus -eq 'failed_proxy') {
+            $failureMessage = 'Close proxy/VPN first, then retry CUP Login.'
+        }
+
         return @{
             Success = $false
             Status = $lastFailureStatus
-            Message = if ($lastFailureStatus -eq 'failed_auth') { 'Username or password is incorrect. Please retry.' } else { 'Login failed. Check network and retry.' }
+            Message = $failureMessage
         }
     } finally {
         Pop-Location
@@ -412,7 +441,140 @@ function Invoke-LogoutAttempt([string]$inputUsername) {
     }
 }
 
-function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword) {
+function Test-CaptivePortalEndpoint([string]$url, [int]$expectedStatus, [string]$expectedBody) {
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($url)
+        $request.AllowAutoRedirect = $false
+        $request.Method = 'GET'
+        $request.Timeout = 3000
+        $request.ReadWriteTimeout = 3000
+        $request.UserAgent = 'CUP Login connectivity check'
+
+        try {
+            $response = $request.GetResponse()
+        } catch [System.Net.WebException] {
+            if ($_.Exception.Response) {
+                $response = $_.Exception.Response
+            } else {
+                return @{
+                    Online = $false
+                    Redirected = $false
+                    Status = 0
+                }
+            }
+        }
+
+        try {
+            $status = [int]$response.StatusCode
+            $location = $response.Headers['Location']
+
+            if ($status -ge 300 -and $status -lt 400) {
+                return @{
+                    Online = $false
+                    Redirected = $true
+                    Status = $status
+                    Location = $location
+                }
+            }
+
+            if ($status -eq $expectedStatus) {
+                if ($expectedBody) {
+                    $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+                    try {
+                        $body = $reader.ReadToEnd()
+                    } finally {
+                        $reader.Dispose()
+                    }
+
+                    return @{
+                        Online = ($body -like "*$expectedBody*")
+                        Redirected = $false
+                        Status = $status
+                    }
+                }
+
+                return @{
+                    Online = $true
+                    Redirected = $false
+                    Status = $status
+                }
+            }
+
+            return @{
+                Online = $false
+                Redirected = $false
+                Status = $status
+            }
+        } finally {
+            if ($response) {
+                $response.Close()
+            }
+        }
+    } catch {
+        return @{
+            Online = $false
+            Redirected = $false
+            Status = 0
+        }
+    }
+}
+
+function Test-InternetConnectivity {
+    $checks = @(
+        @{ Url = 'http://connect.rom.miui.com/generate_204'; Status = 204; Body = '' },
+        @{ Url = 'http://connectivitycheck.gstatic.com/generate_204'; Status = 204; Body = '' },
+        @{ Url = 'http://www.msftconnecttest.com/connecttest.txt'; Status = 200; Body = 'Microsoft Connect Test' }
+    )
+
+    foreach ($check in $checks) {
+        $result = Test-CaptivePortalEndpoint $check.Url $check.Status $check.Body
+        if ($result.Online) {
+            return $true
+        }
+        if ($result.Redirected) {
+            return $false
+        }
+    }
+
+    return $false
+}
+
+function Register-ReconnectNetworkEvents {
+    try {
+        Get-EventSubscriber -SourceIdentifier 'CupLoginNetworkAddressChanged' -ErrorAction SilentlyContinue | Unregister-Event -ErrorAction SilentlyContinue
+        Get-EventSubscriber -SourceIdentifier 'CupLoginNetworkAvailabilityChanged' -ErrorAction SilentlyContinue | Unregister-Event -ErrorAction SilentlyContinue
+        Register-ObjectEvent -InputObject ([System.Net.NetworkInformation.NetworkChange]) -EventName NetworkAddressChanged -SourceIdentifier 'CupLoginNetworkAddressChanged' | Out-Null
+        Register-ObjectEvent -InputObject ([System.Net.NetworkInformation.NetworkChange]) -EventName NetworkAvailabilityChanged -SourceIdentifier 'CupLoginNetworkAvailabilityChanged' | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Clear-ReconnectNetworkEvents {
+    Get-EventSubscriber -SourceIdentifier 'CupLoginNetworkAddressChanged' -ErrorAction SilentlyContinue | Unregister-Event -ErrorAction SilentlyContinue
+    Get-EventSubscriber -SourceIdentifier 'CupLoginNetworkAvailabilityChanged' -ErrorAction SilentlyContinue | Unregister-Event -ErrorAction SilentlyContinue
+    Get-Event -SourceIdentifier 'CupLoginNetworkAddressChanged' -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
+    Get-Event -SourceIdentifier 'CupLoginNetworkAvailabilityChanged' -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
+}
+
+function Invoke-ReconnectLoginIfNeeded([string]$inputUsername, [string]$inputPassword) {
+    if (Test-InternetConnectivity) {
+        Write-ResultFile 'online' 'Network online' 'Connectivity check passed.'
+        return $true
+    }
+
+    Write-ResultFile 'reconnecting' 'Reconnect running' 'Connectivity check failed or portal redirect detected.'
+    $reconnectResult = Invoke-LoginAttempt $inputUsername $inputPassword $false
+    if (-not $reconnectResult.Success -and $reconnectResult.Status -eq 'failed_auth') {
+        Start-InteractiveLoginWindow
+        return $false
+    }
+
+    return $true
+}
+
+function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [bool]$startInTray = $false) {
     try {
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
         Add-Type -AssemblyName System.Drawing -ErrorAction Stop
@@ -428,6 +590,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword) {
     $form.MinimizeBox = $false
     $form.ClientSize = New-Object System.Drawing.Size(420, 300)
     $form.TopMost = $true
+    $script:cupLoginAllowExit = $false
 
     $labelUser = New-Object System.Windows.Forms.Label
     $labelUser.Text = 'Username'
@@ -471,6 +634,31 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword) {
     $labelTip.Location = New-Object System.Drawing.Point(20, 150)
     $labelTip.Size = New-Object System.Drawing.Size(380, 56)
     $labelTip.ForeColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
+
+    $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
+    $notifyIcon.Icon = [System.Drawing.SystemIcons]::Application
+    $notifyIcon.Text = 'CUP Login'
+    $notifyIcon.Visible = $true
+    $notifyIcon.ShowBalloonTip(1500, 'CUP Login', 'CUP Login is running in the system tray.', [System.Windows.Forms.ToolTipIcon]::Info)
+
+    $trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
+    $menuShow = New-Object System.Windows.Forms.ToolStripMenuItem('Show CUP Login')
+    $menuLogin = New-Object System.Windows.Forms.ToolStripMenuItem('Login now')
+    $menuExit = New-Object System.Windows.Forms.ToolStripMenuItem('Exit')
+    [void]$trayMenu.Items.Add($menuShow)
+    [void]$trayMenu.Items.Add($menuLogin)
+    [void]$trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+    [void]$trayMenu.Items.Add($menuExit)
+    $notifyIcon.ContextMenuStrip = $trayMenu
+
+    $showWindow = {
+        $form.Show()
+        $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+        $form.Activate()
+    }
+
+    $notifyIcon.Add_DoubleClick($showWindow)
+    $menuShow.Add_Click($showWindow)
 
     $checkAutoStart.Add_CheckedChanged({
         try {
@@ -564,8 +752,99 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword) {
         }
     })
 
+    $menuLogin.Add_Click({
+        $buttonLogin.PerformClick()
+    })
+
+    $reconnectTimer = New-Object System.Windows.Forms.Timer
+    $reconnectTimer.Interval = 5000
+    $script:cupLoginLastReconnectCheck = [DateTime]::MinValue
+    $reconnectBusy = $false
+    $eventsRegistered = Register-ReconnectNetworkEvents
+
+    $runReconnectCheck = {
+        if (-not $checkReconnect.Checked -or $reconnectBusy) {
+            return
+        }
+
+        $u = $textUser.Text.Trim()
+        $p = $textPass.Text
+        if (-not $u -or -not $p) {
+            $labelTip.Text = 'Please enter username and password once to enable reconnect.'
+            & $showWindow
+            return
+        }
+
+        $reconnectBusy = $true
+        try {
+            if (-not (Test-InternetConnectivity)) {
+                $labelTip.Text = 'Connectivity check failed. Reconnecting...'
+                $result = Invoke-LoginAttempt $u $p $false
+                $labelTip.Text = $result.Message
+                if (-not $result.Success -and $result.Status -eq 'failed_auth') {
+                    & $showWindow
+                }
+            }
+        } catch {
+            $labelTip.Text = 'Reconnect check failed.'
+        } finally {
+            $script:lastReconnectCheck = [DateTime]::Now
+            $reconnectBusy = $false
+        }
+    }
+
+    $reconnectTimer.Add_Tick({
+        if (-not $checkReconnect.Checked) {
+            return
+        }
+
+        $hasNetworkEvent = $false
+        if ($eventsRegistered) {
+            $events = Get-Event -ErrorAction SilentlyContinue | Where-Object { $_.SourceIdentifier -like 'CupLoginNetwork*' }
+            if ($events) {
+                $hasNetworkEvent = $true
+                $events | Remove-Event
+            }
+        }
+
+        $dueFallback = (([DateTime]::Now - $script:cupLoginLastReconnectCheck).TotalSeconds -ge [Math]::Max(60, $ReconnectInterval))
+        if ($hasNetworkEvent -or $dueFallback) {
+            & $runReconnectCheck
+        }
+    })
+    $reconnectTimer.Start()
+
+    $form.Add_FormClosing({
+        if (-not $script:cupLoginAllowExit) {
+            $_.Cancel = $true
+            $form.Hide()
+            $notifyIcon.ShowBalloonTip(1500, 'CUP Login', 'CUP Login is still running in the system tray.', [System.Windows.Forms.ToolTipIcon]::Info)
+        }
+    })
+
+    $form.Add_FormClosed({
+        $reconnectTimer.Stop()
+        $reconnectTimer.Dispose()
+        Clear-ReconnectNetworkEvents
+        $notifyIcon.Visible = $false
+        $notifyIcon.Dispose()
+    })
+
+    $menuExit.Add_Click({
+        $script:cupLoginAllowExit = $true
+        $form.Close()
+    })
+
     $form.Controls.AddRange(@($labelUser, $textUser, $labelPass, $textPass, $checkAutoStart, $checkReconnect, $labelTip, $buttonLogin, $buttonLogout))
     $form.AcceptButton = $buttonLogin
+    $form.Add_Shown({
+        if ($startInTray) {
+            $form.Hide()
+            if ($checkReconnect.Checked) {
+                & $runReconnectCheck
+            }
+        }
+    })
     [void]$form.ShowDialog()
 }
 
@@ -635,6 +914,21 @@ $savedCredential = Get-SavedCredential
 $defaultUsername = if ($Username) { $Username } elseif ($savedCredential -and $savedCredential.Username) { $savedCredential.Username } else { Get-LastUsername }
 $defaultPassword = if ($Password) { $Password } elseif ($savedCredential -and $savedCredential.Password) { $savedCredential.Password } else { '' }
 
+Update-TrayStartupEntry
+
+if ($Tray) {
+    $startInTray = ($defaultUsername -and $defaultPassword)
+    if ($startInTray -and (Get-AutoStartEnabled)) {
+        $silentResult = Invoke-LoginAttempt $defaultUsername $defaultPassword $false
+        if (-not $silentResult.Success) {
+            $startInTray = $false
+        }
+    }
+
+    Show-LoginWindow $defaultUsername $defaultPassword $startInTray
+    exit 0
+}
+
 if ($Silent) {
     if (-not $defaultUsername -or -not $defaultPassword) {
         Write-ResultFile 'needs_credentials' 'Login not configured' 'Please enter username and password once to enable silent startup.'
@@ -658,15 +952,30 @@ if ($Reconnect) {
         exit 0
     }
 
-    while ($true) {
-        $reconnectResult = Invoke-LoginAttempt $defaultUsername $defaultPassword $false
-        if (-not $reconnectResult.Success -and $reconnectResult.Status -eq 'failed_auth') {
-            Start-InteractiveLoginWindow
+    $eventsRegistered = Register-ReconnectNetworkEvents
+    try {
+        if (-not (Invoke-ReconnectLoginIfNeeded $defaultUsername $defaultPassword)) {
             exit 1
         }
-        Start-Sleep -Seconds ([Math]::Max(10, $ReconnectInterval))
+
+        while ($true) {
+            if ($eventsRegistered) {
+                $event = Wait-Event -Timeout ([Math]::Max(60, $ReconnectInterval))
+                if ($event) {
+                    Get-Event | Remove-Event
+                }
+            } else {
+                Start-Sleep -Seconds ([Math]::Max(60, $ReconnectInterval))
+            }
+
+            if (-not (Invoke-ReconnectLoginIfNeeded $defaultUsername $defaultPassword)) {
+                exit 1
+            }
+        }
+    } finally {
+        Clear-ReconnectNetworkEvents
     }
 }
 
-Show-LoginWindow $defaultUsername $defaultPassword
+Show-LoginWindow $defaultUsername $defaultPassword $false
 exit 0

@@ -53,7 +53,7 @@ Name: "{autoprograms}\{#MyAppName}\Disable silent autostart"; Filename: "{app}\{
 Name: "{autoprograms}\{#MyAppName}\Enable reconnect"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-reconnect-on"
 Name: "{autoprograms}\{#MyAppName}\Disable reconnect"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-reconnect-off"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Tasks: desktopicon
-Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--silent"; Tasks: autostart
+Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--tray"; Tasks: autostart
 
 [InstallDelete]
 Type: files; Name: "{autoprograms}\{#MyAppName}\Silent login.lnk"

@@ -86,7 +86,7 @@ cargo build
 - `%LOCALAPPDATA%\srun-cup\.login-cup.credential.json`
 - `%LOCALAPPDATA%\srun-cup\.login-cup.last-username`
 
-开机静默启动和断线重连会写入当前用户的 Windows 启动项，可在图形界面里勾选或取消。
+开机静默启动和断线重连会写入当前用户的 Windows 启动项，可在图形界面里勾选或取消。关闭窗口后 CUP Login 会继续在系统托盘运行，可通过托盘菜单显示窗口或真正退出。断线重连会监听 Windows 网络变化，并通过轻量 HTTP 连通性/Portal 重定向检测决定是否重新登录。
 
 ## 脚本默认行为
 

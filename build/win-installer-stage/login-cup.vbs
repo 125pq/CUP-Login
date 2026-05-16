@@ -2,7 +2,7 @@ Option Explicit
 
 Dim shell, fso, scriptDir, ps1Path, stateRoot, resultPath, errorLogPath
 Dim cmd, i, arg, exitCode, windowStyle, statusText, titleText, messageText, detailText
-Dim runKey, runValueName, reconnectRunValueName, legacyRunValueName, autostartCmd, reconnectCmd, silentMode, reconnectMode, forceAutoStartMode, forceReconnectMode
+Dim runKey, runValueName, reconnectRunValueName, legacyRunValueName, autostartCmd, reconnectCmd, silentMode, reconnectMode, trayMode, forceAutoStartMode, forceReconnectMode
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
@@ -12,10 +12,11 @@ runKey = "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\"
 runValueName = "CUP Login"
 reconnectRunValueName = "CUP Login Reconnect"
 legacyRunValueName = "srun-cup"
-autostartCmd = Chr(34) & "wscript.exe" & Chr(34) & " //B //Nologo " & Chr(34) & scriptDir & "\login-cup.vbs" & Chr(34) & " --silent"
-reconnectCmd = Chr(34) & "wscript.exe" & Chr(34) & " //B //Nologo " & Chr(34) & scriptDir & "\login-cup.vbs" & Chr(34) & " --reconnect"
+autostartCmd = Chr(34) & "wscript.exe" & Chr(34) & " //B //Nologo " & Chr(34) & scriptDir & "\login-cup.vbs" & Chr(34) & " --tray"
+reconnectCmd = Chr(34) & "wscript.exe" & Chr(34) & " //B //Nologo " & Chr(34) & scriptDir & "\login-cup.vbs" & Chr(34) & " --tray"
 silentMode = False
 reconnectMode = False
+trayMode = False
 forceAutoStartMode = ""
 forceReconnectMode = ""
 
@@ -28,6 +29,8 @@ For i = 0 To WScript.Arguments.Count - 1
             silentMode = True
         Case "--reconnect", "/reconnect"
             reconnectMode = True
+        Case "--tray", "/tray"
+            trayMode = True
         Case "--set-autostart-on"
             forceAutoStartMode = "on"
         Case "--set-autostart-off"
@@ -49,6 +52,10 @@ If reconnectMode Then
     cmd = cmd & " " & QuoteArg("-Reconnect")
 End If
 
+If trayMode Then
+    cmd = cmd & " " & QuoteArg("-Tray")
+End If
+
 If forceAutoStartMode = "on" Then
     Call SetAutoStart(True)
     WScript.Quit 0
@@ -65,7 +72,7 @@ ElseIf forceReconnectMode = "off" Then
     WScript.Quit 0
 End If
 
-If silentMode Or reconnectMode Then
+If silentMode Or reconnectMode Or trayMode Then
     windowStyle = 0
 Else
     windowStyle = 1

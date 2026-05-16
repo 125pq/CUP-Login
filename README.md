@@ -79,7 +79,7 @@ Runtime credential storage location (installed mode):
 - `%LOCALAPPDATA%\srun-cup\.login-cup.credential.json`
 - `%LOCALAPPDATA%\srun-cup\.login-cup.last-username`
 
-Silent startup and reconnect are stored in the current user's Windows startup settings and can be changed from the GUI.
+Silent startup and reconnect are stored in the current user's Windows startup settings and can be changed from the GUI. Closing the window keeps CUP Login running in the system tray; use the tray menu to show the window or exit. Reconnect mode listens for Windows network changes and uses lightweight HTTP connectivity/portal redirect checks before retrying login.
 
 ## Script Behavior
 
