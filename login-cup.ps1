@@ -824,7 +824,6 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         if (-not $script:cupLoginAllowExit) {
             $_.Cancel = $true
             $form.Hide()
-            $notifyIcon.ShowBalloonTip(1500, 'CUP Login', 'CUP Login is still running in the system tray.', [System.Windows.Forms.ToolTipIcon]::Info)
         }
     })
 
