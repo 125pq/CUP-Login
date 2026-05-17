@@ -72,11 +72,7 @@ ElseIf forceReconnectMode = "off" Then
     WScript.Quit 0
 End If
 
-If silentMode Or reconnectMode Or trayMode Then
-    windowStyle = 0
-Else
-    windowStyle = 1
-End If
+windowStyle = 0
 
 exitCode = shell.Run(cmd, windowStyle, True)
 
