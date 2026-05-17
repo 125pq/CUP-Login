@@ -1,119 +1,103 @@
-# srun-cup
+# CUP Login
 
-A practical fork of [zu1k/srun](https://github.com/zu1k/srun) with ready-to-use login scripts for China University of Petroleum, Beijing (CUP).
+这是基于 [zu1k/srun](https://github.com/zu1k/srun) 改造的中国石油大学（北京）校园网登录工具。项目保留上游 `srun` 的命令行能力，同时提供面向 Windows 用户的图形界面、安装包、系统托盘后台、开机静默启动、断线重连和备用账号功能。
 
-Chinese documentation: [README.zh-CN.md](README.zh-CN.md)
+## 主要功能
 
-## What This Fork Adds
+- 一键登录中国石油大学（北京）深澜校园网。
+- 图形化登录窗口，支持保存账号密码到本机。
+- 关闭窗口后驻留系统托盘，可从托盘菜单重新打开或退出。
+- 开机静默启动：开机后在后台托盘运行，不主动弹出登录窗口。
+- 断线自动重连：通过轻量 204 重定向检测判断是否掉认证，发现掉线后自动登录。
+- 备用账号池：主账号登录失败后按顺序尝试备用账号，但界面默认仍显示主账号。
+- 软件内注销：手动注销会关闭断线重连，避免主动注销后又被自动登录。
+- 启动 PowerShell 窗口完全隐藏，普通用户只看到 CUP Login 界面。
 
-- Windows one-click launcher: `login-cup.bat`
-- CUP-oriented PowerShell script: `login-cup.ps1`
-- Auto server fallback: `https://login.cup.edu.cn` -> `http://login.cup.edu.cn`
-- Uses the raw campus-network username without adding operator suffixes
-- Optional local credential cache for true double-click auto login
+## 下载安装
 
-## Security
+推荐直接下载最新 Release 里的安装包：
 
-The script can cache credentials locally **on your machine only**:
+- [CUP Login 0.9.1](https://github.com/125pq/srun-CUP/releases/tag/v0.9.1)
+- 安装包文件：`srun-cup-setup-0.9.1.exe`
 
-- `.login-cup.credential.json` (encrypted by Windows user context)
-- `.login-cup.last-username`
+安装后可以从开始菜单或桌面快捷方式打开 `CUP Login`。
 
-Both files are ignored by git and are never intended to be pushed.
+## 使用方式
 
-To clear local saved data:
+首次打开软件时，输入校园网账号和密码，然后点击“登录”。登录成功后，账号密码会保存在当前 Windows 用户本地，下次打开可以直接登录。
 
-```powershell
-Remove-Item .\.login-cup.credential.json, .\.login-cup.last-username -ErrorAction SilentlyContinue
-```
+常用选项：
 
-## Quick Start (Windows)
+- 勾选“开机静默启动”：开机后自动在托盘后台运行。
+- 勾选“断线自动重连”：检测到校园网认证掉线后自动重新登录。
+- 点击“备用账号...”：添加备用账号。主账号失败后才会尝试备用账号。
+- 点击“注销”：注销当前登录账号，并关闭断线自动重连。
 
-1. Build once (if `target\debug\srun.exe` does not exist):
+## 安全说明
+
+凭据只保存在本机当前 Windows 用户目录下，并使用 Windows 用户上下文加密。安装版默认位置：
+
+- `%LOCALAPPDATA%\srun-cup\.login-cup.credential.json`
+- `%LOCALAPPDATA%\srun-cup\.login-cup.backup-credentials.json`
+- `%LOCALAPPDATA%\srun-cup\.login-cup.last-username`
+
+这些文件不应该提交到仓库。若要清理本地保存的登录数据，可以删除 `%LOCALAPPDATA%\srun-cup` 下对应文件。
+
+## 从源码运行
+
+如果你需要自己调试或构建：
 
 ```powershell
 cargo build
+.\login-cup.ps1 -Username 学号 -Password 密码
 ```
 
-2. First login (saves account/password after success):
+后续也可以直接运行：
 
 ```powershell
-.\login-cup.ps1 -Username YOUR_ID -Password YOUR_PASSWORD
+.\login-cup.ps1
 ```
 
-3. Next login:
+脚本默认行为：
 
-- Double-click `login-cup.bat`, or
-- Run `./login-cup.ps1` with no args
+- 服务器：先尝试 `https://login.cup.edu.cn`，失败后回退到 `http://login.cup.edu.cn`
+- IP：自动检测
+- 认证参数：`--acid 1 --type 1`
+- 账号：只使用输入的原始账号，不自动追加运营商后缀
 
-## Build One-Click Windows Installer
+## 构建安装包
 
-This project includes an Inno Setup script so you can ship a standard `.exe` installer.
-
-1. Install Inno Setup 6 (so `ISCC.exe` is available).
-2. Build and package in one command:
+需要先安装 Inno Setup 6，并确保 `ISCC.exe` 可用。
 
 ```powershell
-.\build\build-windows-installer.ps1
+$env:AUTH_SERVER_IP='10.0.0.1'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build\build-windows-installer.ps1 -Version 0.9.1
 ```
 
-Output installer:
+输出位置：
 
 - `build\release\srun-cup-setup-<version>.exe`
 
-What the installer does:
+安装包会包含：
 
-- installs `srun.exe`, `login-cup.ps1`, `login-cup.bat`, `login-cup.vbs`
-- creates Start Menu shortcuts: `CUP Login` and `调试登录`
-- optional desktop shortcut and startup shortcut
+- `srun.exe`
+- `login-cup.ps1`
+- `login-cup.vbs`
+- `login-cup.bat`
+- 说明文档
 
-Installed user experience:
+## 上游能力
 
-- end users only need to download, install, and click the shortcut (no Rust toolchain required)
-- if no saved credential exists, a GUI dialog asks for username and password on first run
-- credentials are saved after successful login for future one-click use
-- the GUI includes a logout button, backup account management, and optional silent startup/reconnect toggles
+上游 `srun` 原生支持：
 
-Runtime credential storage location (installed mode):
+- 命令行与配置文件登录
+- 多种 IP 获取方式
+- 严格绑定
+- 多用户配置
+- 跨平台运行
 
-- `%LOCALAPPDATA%\srun-cup\.login-cup.credential.json`
-- `%LOCALAPPDATA%\srun-cup\.login-cup.last-username`
+上游仓库：[zu1k/srun](https://github.com/zu1k/srun)
 
-Silent startup and reconnect are stored in the current user's Windows startup settings and can be changed from the GUI. Closing the window keeps CUP Login running in the system tray; use the tray menu to show the window or exit. Reconnect mode keeps the tray process alive and retries login only when the lightweight HTTP captive-portal check is redirected.
+## 许可证
 
-Backup accounts are configured from the `备用账号...` button. CUP Login always tries the main account first; if it fails, backup accounts are tried in order without replacing the main account shown on the next launch.
-
-## Script Behavior
-
-Default behavior of `login-cup.ps1`:
-
-- server: auto try `https://login.cup.edu.cn`, then fallback to `http://login.cup.edu.cn`
-- IP mode: auto-detect (`-d`)
-- auth params: `--acid 1 --type 1`
-- username: uses the exact value entered, without adding operator suffixes
-
-Useful options:
-
-```powershell
-# Specify fixed IP
-.\login-cup.ps1 -Username YOUR_ID -Password YOUR_PASSWORD -Ip 10.x.x.x
-
-# Override acid/type if your portal differs
-.\login-cup.ps1 -Username YOUR_ID -Password YOUR_PASSWORD -Acid 1 -Type 1
-```
-
-## Original srun Features
-
-From upstream `srun`:
-
-- Command-line and config-file login
-- Multiple IP acquisition modes
-- Strict bind support
-- Multi-user support
-- Cross-platform support
-
-Upstream repository: <https://github.com/zu1k/srun>
-
-## License
-
-This fork keeps the original GPL-3.0 license from upstream.
+本项目沿用上游 GPL-3.0 许可证。
