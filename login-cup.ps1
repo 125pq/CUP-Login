@@ -11,7 +11,7 @@
     [switch]$Silent,
     [switch]$Reconnect,
     [switch]$Tray,
-    [int]$ReconnectInterval = 10,
+    [int]$ReconnectInterval = 5,
     [switch]$DetectIp = $true,
     [string]$BuildMode = 'auto'
 )
