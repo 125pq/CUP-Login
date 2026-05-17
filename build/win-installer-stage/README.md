@@ -9,7 +9,7 @@ Chinese documentation: [README.zh-CN.md](README.zh-CN.md)
 - Windows one-click launcher: `login-cup.bat`
 - CUP-oriented PowerShell script: `login-cup.ps1`
 - Auto server fallback: `https://login.cup.edu.cn` -> `http://login.cup.edu.cn`
-- Auto username candidate attempts (no suffix and common operator suffixes)
+- Uses the raw campus-network username without adding operator suffixes
 - Optional local credential cache for true double-click auto login
 
 ## Security
@@ -90,22 +90,11 @@ Default behavior of `login-cup.ps1`:
 - server: auto try `https://login.cup.edu.cn`, then fallback to `http://login.cup.edu.cn`
 - IP mode: auto-detect (`-d`)
 - auth params: `--acid 1 --type 1`
-- username candidates (when no `@`):
-  - `username`
-  - `username@xn`
-  - `username@cmcc`
-  - `username@cucc`
-  - `username@ctcc`
+- username: uses the exact value entered, without adding operator suffixes
 
 Useful options:
 
 ```powershell
-# Force one operator suffix
-.\login-cup.ps1 -Username YOUR_ID -Password YOUR_PASSWORD -Operator xn
-
-# Disable suffix attempts
-.\login-cup.ps1 -Username YOUR_ID -Password YOUR_PASSWORD -Operator none
-
 # Specify fixed IP
 .\login-cup.ps1 -Username YOUR_ID -Password YOUR_PASSWORD -Ip 10.x.x.x
 

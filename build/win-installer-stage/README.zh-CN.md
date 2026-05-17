@@ -9,7 +9,7 @@
 - Windows 一键启动脚本：`login-cup.bat`
 - CUP 定制登录脚本：`login-cup.ps1`
 - 服务器自动回退：`https://login.cup.edu.cn` -> `http://login.cup.edu.cn`
-- 用户名自动候选（无后缀和常见运营商后缀）
+- 使用原始校园网账号登录，不自动追加运营商后缀
 - 支持本地凭据缓存，实现真正双击自动登录
 
 ## 安全说明
@@ -97,22 +97,11 @@ cargo build
 - server：先尝试 `https://login.cup.edu.cn`，失败后回退 `http://login.cup.edu.cn`
 - IP：自动探测（`-d`）
 - 认证参数：`--acid 1 --type 1`
-- 若用户名不含 `@`，自动按顺序尝试：
-  - `username`
-  - `username@xn`
-  - `username@cmcc`
-  - `username@cucc`
-  - `username@ctcc`
+- 账号：只使用输入的原始账号，不自动追加运营商后缀
 
 常用参数示例：
 
 ```powershell
-# 强制某个后缀
-.\login-cup.ps1 -Username 学号 -Password 密码 -Operator xn
-
-# 禁用后缀尝试，只用原始用户名
-.\login-cup.ps1 -Username 学号 -Password 密码 -Operator none
-
 # 指定固定 IP
 .\login-cup.ps1 -Username 学号 -Password 密码 -Ip 10.x.x.x
 

@@ -368,19 +368,7 @@ function Set-ReconnectEnabled([bool]$enabled) {
 }
 
 function Resolve-UsernameCandidates([string]$rawUsername) {
-    if ($rawUsername -match '@') {
-        return @($rawUsername)
-    }
-
-    if ($Operator -eq 'auto') {
-        return @($rawUsername, "$rawUsername@xn")
-    }
-
-    if ($Operator -eq 'none') {
-        return @($rawUsername)
-    }
-
-    return @("$rawUsername@$Operator")
+    return @($rawUsername)
 }
 
 function Resolve-ServerCandidates {
