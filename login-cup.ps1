@@ -413,7 +413,7 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
         $lastFailureStatus = 'failed'
         $lastFailureMessage = "登录失败，详情见 $lastErrorLogFile"
 
-        foreach ($serverCandidate in $servers) {
+        :serverLoop foreach ($serverCandidate in $servers) {
             foreach ($usernameCandidate in $usernameCandidates) {
                 $attempt += 1
                 Write-Host "[Attempt $attempt/$totalAttempts] server=$serverCandidate username=$usernameCandidate acid=$Acid type=$Type"
@@ -471,12 +471,18 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
                 $lastError = $text
                 Write-ErrorLog $text
 
+                $shouldStopThisAccount = $false
                 if (Test-ProxyOrVpnPortalError $text) {
                     $lastFailureStatus = 'failed_proxy'
                     $lastFailureMessage = '请先关闭代理/VPN，再重试。'
-                } elseif ($text -match 'Authentication fail|login_error|Unknow ac-type') {
+                    $shouldStopThisAccount = $true
+                } elseif ($text -match 'Authentication fail') {
                     $lastFailureStatus = 'failed_auth'
                     $lastFailureMessage = '账号或密码错误。'
+                    $shouldStopThisAccount = $true
+                } elseif ($text -match 'login_error|Unknow ac-type') {
+                    $lastFailureStatus = 'failed'
+                    $lastFailureMessage = "登录失败，详情见 $lastErrorLogFile"
                 } else {
                     $lastFailureStatus = 'failed'
                     $lastFailureMessage = "登录失败，详情见 $lastErrorLogFile"
@@ -487,7 +493,11 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
                 }
 
                 if ($text -match 'need username|need password|need ip|parse args error') {
-                    break
+                    break serverLoop
+                }
+
+                if ($shouldStopThisAccount) {
+                    break serverLoop
                 }
             }
         }
