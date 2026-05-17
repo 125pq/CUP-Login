@@ -55,6 +55,21 @@ function Write-ErrorLog([string]$content) {
     Set-Content -Path $lastErrorLogFile -Value ($header + "`r`n" + $content) -Encoding utf8
 }
 
+$script:cupLoginUiLogWriter = $null
+
+function Write-UiLog([string]$message) {
+    if ([string]::IsNullOrWhiteSpace($message)) {
+        return
+    }
+
+    if ($null -ne $script:cupLoginUiLogWriter) {
+        try {
+            & $script:cupLoginUiLogWriter $message
+        } catch {
+        }
+    }
+}
+
 function Get-ResultField([string]$name) {
     if (-not (Test-Path $lastResultFile)) {
         return ''
@@ -420,6 +435,7 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
     $usernameCandidates = Resolve-UsernameCandidates $inputUsername
     $servers = Resolve-ServerCandidates
     $srunExe = Get-SrunExe
+    $displayAccountLabel = Get-DisplayAccountLabel $accountLabel
 
     $baseArguments = @('login', '-p', $inputPassword, '--acid', $Acid, '--type', $Type, '--retry-times', $RetryTimes, '--retry-delay', $RetryDelay)
     if ($Ip) {
@@ -433,6 +449,7 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
     Push-Location $PSScriptRoot
     try {
         Write-ResultFile 'running' '正在登录' '正在尝试登录校园网...'
+        Write-UiLog "开始登录：$displayAccountLabel"
         $attempt = 0
         $totalAttempts = $servers.Count * $usernameCandidates.Count
         $lastError = ''
@@ -443,6 +460,7 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
             foreach ($usernameCandidate in $usernameCandidates) {
                 $attempt += 1
                 Write-Host "[Attempt $attempt/$totalAttempts] server=$serverCandidate username=$usernameCandidate acid=$Acid type=$Type"
+                Write-UiLog "尝试 $displayAccountLabel：服务器 $serverCandidate"
 
                 $arguments = @('login', '-s', $serverCandidate, '-u', $usernameCandidate) + $baseArguments[1..($baseArguments.Count - 1)]
                 try {
@@ -484,6 +502,11 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
                         Save-SavedCredential $inputUsername $inputPassword
                     }
                     Set-ActiveLogin $usernameCandidate $accountLabel
+                    if ($alreadyOnline) {
+                        Write-UiLog "已在线：$displayAccountLabel"
+                    } else {
+                        Write-UiLog "登录成功：$displayAccountLabel"
+                    }
 
                     return @{
                         Success = $true
@@ -502,16 +525,20 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
                     $lastFailureStatus = 'failed_proxy'
                     $lastFailureMessage = '请先关闭代理/VPN，再重试。'
                     $shouldStopThisAccount = $true
+                    Write-UiLog "$displayAccountLabel 登录失败：检测到代理或 VPN 影响"
                 } elseif ($text -match 'Authentication fail') {
                     $lastFailureStatus = 'failed_auth'
                     $lastFailureMessage = '账号或密码错误。'
                     $shouldStopThisAccount = $true
+                    Write-UiLog "$displayAccountLabel 登录失败：账号或密码错误"
                 } elseif ($text -match 'login_error|Unknow ac-type') {
                     $lastFailureStatus = 'failed'
                     $lastFailureMessage = "登录失败，详情见 $lastErrorLogFile"
+                    Write-UiLog "$displayAccountLabel 登录失败：认证服务器返回错误"
                 } else {
                     $lastFailureStatus = 'failed'
                     $lastFailureMessage = "登录失败，详情见 $lastErrorLogFile"
+                    Write-UiLog "$displayAccountLabel 登录失败：网络或认证响应异常"
                 }
 
                 if ($exitCode -eq 0 -and $servers.Count -eq 1 -and $usernameCandidates.Count -eq 1) {
@@ -557,6 +584,7 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
 }
 
 function Invoke-LoginWithBackupAccounts([string]$inputUsername, [string]$inputPassword, [bool]$clearCredentialOnFailure = $true) {
+    Write-UiLog '优先尝试主账号'
     $mainResult = Invoke-LoginAttempt $inputUsername $inputPassword $false $true 'Main account'
     if ($mainResult.Success) {
         return $mainResult
@@ -564,9 +592,11 @@ function Invoke-LoginWithBackupAccounts([string]$inputUsername, [string]$inputPa
 
     $backupAccounts = @(Get-BackupCredentials)
     if ($backupAccounts.Count -eq 0) {
+        Write-UiLog '没有配置备用账号'
         return $mainResult
     }
 
+    Write-UiLog "主账号失败，准备尝试备用账号（$($backupAccounts.Count) 个）"
     $backupIndex = 0
     foreach ($backup in $backupAccounts) {
         $backupIndex += 1
@@ -577,6 +607,7 @@ function Invoke-LoginWithBackupAccounts([string]$inputUsername, [string]$inputPa
         $backupLabel = "Backup account $backupIndex"
         $backupLabelText = Get-DisplayAccountLabel $backupLabel
         Write-ResultFile 'backup_running' '正在尝试备用账号' "正在尝试$backupLabelText..."
+        Write-UiLog "尝试$backupLabelText"
         $backupResult = Invoke-LoginAttempt ([string]$backup.Username) ([string]$backup.Password) $false $false $backupLabel
         if ($backupResult.Success) {
             Save-LastUsername $inputUsername
@@ -584,11 +615,13 @@ function Invoke-LoginWithBackupAccounts([string]$inputUsername, [string]$inputPa
             $backupResult['Status'] = 'backup_success'
             $backupResult['Message'] = "主账号登录失败，已使用$backupLabelText登录。"
             Write-ResultFile 'backup_success' '备用账号登录成功' $backupResult['Message']
+            Write-UiLog "备用账号登录成功：$backupLabelText"
             return $backupResult
         }
     }
 
     Write-ResultFile 'failed' '登录失败' '主账号和备用账号均登录失败。'
+    Write-UiLog '主账号和备用账号均登录失败'
     return @{
         Success = $false
         Status = 'failed'
@@ -602,6 +635,7 @@ function Invoke-LogoutAttempt([string]$inputUsername) {
     $usernameCandidates = Resolve-UsernameCandidates $inputUsername
     $servers = Resolve-ServerCandidates
     $srunExe = Get-SrunExe
+    Write-UiLog "开始注销：$(Remove-OperatorSuffix $inputUsername)"
 
     $baseArguments = @('logout', '--acid', $Acid)
     if ($Ip) {
@@ -637,6 +671,7 @@ function Invoke-LogoutAttempt([string]$inputUsername) {
 
                 if ($exitCode -eq 0) {
                     Write-ResultFile 'logout_success' '注销成功' '注销成功。'
+                    Write-UiLog '注销成功'
                     return @{
                         Success = $true
                         Message = '注销成功。'
@@ -647,6 +682,7 @@ function Invoke-LogoutAttempt([string]$inputUsername) {
 
         Write-ErrorLog $lastError
         Write-ResultFile 'failed' '注销失败' "注销失败，详情见 $lastErrorLogFile"
+        Write-UiLog '注销失败'
         return @{
             Success = $false
             Message = '注销失败，请检查网络后重试。'
@@ -742,6 +778,7 @@ function Test-CaptivePortalRedirect {
     foreach ($check in $checks) {
         $result = Test-CaptivePortalEndpoint $check.Url $check.Status $check.Body
         if ($result.Redirected) {
+            Write-UiLog '检测到认证页重定向'
             return $true
         }
     }
@@ -1016,7 +1053,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     $form.FormBorderStyle = 'FixedDialog'
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
-    $form.ClientSize = New-Object System.Drawing.Size(420, 300)
+    $form.ClientSize = New-Object System.Drawing.Size(420, 420)
     $form.TopMost = $true
     $script:cupLoginAllowExit = $false
 
@@ -1060,13 +1097,46 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     $labelTip = New-Object System.Windows.Forms.Label
     $labelTip.Text = Get-LoginHintText
     $labelTip.Location = New-Object System.Drawing.Point(20, 150)
-    $labelTip.Size = New-Object System.Drawing.Size(380, 56)
+    $labelTip.Size = New-Object System.Drawing.Size(380, 36)
     $labelTip.ForeColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
 
+    $logBox = New-Object System.Windows.Forms.TextBox
+    $logBox.Location = New-Object System.Drawing.Point(20, 192)
+    $logBox.Size = New-Object System.Drawing.Size(380, 112)
+    $logBox.Multiline = $true
+    $logBox.ReadOnly = $true
+    $logBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+    $logBox.WordWrap = $false
+    $logBox.BackColor = [System.Drawing.SystemColors]::Window
+    $logBox.Font = New-Object System.Drawing.Font('Consolas', 8)
+
     $labelActive = New-Object System.Windows.Forms.Label
-    $labelActive.Location = New-Object System.Drawing.Point(20, 212)
+    $labelActive.Location = New-Object System.Drawing.Point(20, 318)
     $labelActive.Size = New-Object System.Drawing.Size(380, 20)
     $labelActive.ForeColor = [System.Drawing.Color]::FromArgb(90, 90, 90)
+
+    $addLog = {
+        param([string]$message)
+        if ([string]::IsNullOrWhiteSpace($message)) {
+            return
+        }
+
+        $entry = "$(Get-Date -Format 'HH:mm:ss') $message"
+        $lines = @($logBox.Lines)
+        if ($lines.Count -eq 1 -and [string]::IsNullOrWhiteSpace($lines[0])) {
+            $lines = @()
+        }
+        $lines += $entry
+        if ($lines.Count -gt 100) {
+            $lines = $lines[($lines.Count - 100)..($lines.Count - 1)]
+        }
+        $logBox.Lines = $lines
+        $logBox.SelectionStart = $logBox.TextLength
+        $logBox.ScrollToCaret()
+        $logBox.Refresh()
+    }
+    $script:cupLoginUiLogWriter = $addLog
+    Write-UiLog 'CUP Login 已启动'
 
     $updateActiveLabel = {
         $active = Get-ActiveLogin
@@ -1110,11 +1180,14 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
             Set-AutoStartEnabled $checkAutoStart.Checked
             if ($checkAutoStart.Checked) {
                 $labelTip.Text = '已开启开机静默启动。'
+                Write-UiLog '已开启开机静默启动'
             } else {
                 $labelTip.Text = '已关闭开机静默启动。'
+                Write-UiLog '已关闭开机静默启动'
             }
         } catch {
             $labelTip.Text = '更新开机静默启动设置失败。'
+            Write-UiLog '开机静默启动设置保存失败'
         }
     })
 
@@ -1123,27 +1196,30 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
             Set-ReconnectEnabled $checkReconnect.Checked
             if ($checkReconnect.Checked) {
                 $labelTip.Text = '已开启断线自动重连。'
+                Write-UiLog '已开启断线自动重连'
             } else {
                 $labelTip.Text = '已关闭断线自动重连。'
+                Write-UiLog '已关闭断线自动重连'
             }
         } catch {
             $labelTip.Text = '更新断线重连设置失败。'
+            Write-UiLog '断线重连设置保存失败'
         }
     })
 
     $buttonLogin = New-Object System.Windows.Forms.Button
     $buttonLogin.Text = '登录'
-    $buttonLogin.Location = New-Object System.Drawing.Point(245, 245)
+    $buttonLogin.Location = New-Object System.Drawing.Point(245, 360)
     $buttonLogin.Size = New-Object System.Drawing.Size(75, 30)
 
     $buttonLogout = New-Object System.Windows.Forms.Button
     $buttonLogout.Text = '注销'
-    $buttonLogout.Location = New-Object System.Drawing.Point(325, 245)
+    $buttonLogout.Location = New-Object System.Drawing.Point(325, 360)
     $buttonLogout.Size = New-Object System.Drawing.Size(75, 30)
 
     $buttonBackup = New-Object System.Windows.Forms.Button
     $buttonBackup.Text = '备用账号...'
-    $buttonBackup.Location = New-Object System.Drawing.Point(20, 245)
+    $buttonBackup.Location = New-Object System.Drawing.Point(20, 360)
     $buttonBackup.Size = New-Object System.Drawing.Size(140, 30)
     $runReconnectCheck = $null
 
@@ -1152,12 +1228,14 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         $u = if ($active -and $active.Username) { [string]$active.Username } else { $textUser.Text.Trim() }
         if (-not $u) {
             $labelTip.Text = '请先输入账号再注销。'
+            Write-UiLog '注销取消：未输入账号'
             return
         }
 
         $buttonLogin.Enabled = $false
         $buttonLogout.Enabled = $false
         $labelTip.Text = '正在注销，请稍候...'
+        Write-UiLog '用户点击注销'
         $form.Refresh()
 
         try {
@@ -1170,10 +1248,12 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
                     $checkReconnect.Checked = $false
                     Set-ReconnectEnabled $false
                     $labelTip.Text = '注销成功，已关闭断线重连。'
+                    Write-UiLog '注销后已关闭断线重连'
                 }
             }
         } catch {
             $labelTip.Text = '注销失败，请重试。'
+            Write-UiLog '注销过程异常'
         } finally {
             $buttonLogin.Enabled = $true
             $buttonLogout.Enabled = $true
@@ -1186,11 +1266,13 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
 
         if (-not $u -or -not $p) {
             $labelTip.Text = '请输入账号和密码。'
+            Write-UiLog '登录取消：账号或密码为空'
             return
         }
 
         $buttonLogin.Enabled = $false
         $labelTip.Text = '正在登录，请稍候...'
+        Write-UiLog '用户点击登录'
         $form.Refresh()
 
         $startupWarning = ''
@@ -1198,6 +1280,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
             Set-AutoStartEnabled $checkAutoStart.Checked
         } catch {
             $startupWarning = ' 启动项设置保存失败。'
+            Write-UiLog '启动项设置保存失败，登录继续'
         }
 
         try {
@@ -1212,6 +1295,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
             }
         } catch {
             $labelTip.Text = '登录失败，请重试。'
+            Write-UiLog '登录过程异常'
             $textPass.Text = ''
             $textPass.Focus()
         } finally {
@@ -1224,10 +1308,13 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         $backupCount = @(Get-BackupCredentials).Count
         if ($backupCount -eq 0) {
             $labelTip.Text = '未配置备用账号。'
+            Write-UiLog '备用账号未配置'
         } elseif ($backupCount -eq 1) {
             $labelTip.Text = '已配置 1 个备用账号。'
+            Write-UiLog '已配置 1 个备用账号'
         } else {
             $labelTip.Text = "已配置 $backupCount 个备用账号。"
+            Write-UiLog "已配置 $backupCount 个备用账号"
         }
     })
 
@@ -1250,6 +1337,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         $p = $textPass.Text
         if (-not $u -or -not $p) {
             $labelTip.Text = '请先输入并保存账号密码，再启用重连。'
+            Write-UiLog '重连暂停：缺少账号或密码'
             & $showWindow
             return
         }
@@ -1258,6 +1346,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         try {
             if (Test-CaptivePortalRedirect) {
                 $labelTip.Text = '检测到认证页重定向，正在重连...'
+                Write-UiLog '开始自动重连'
                 $result = Invoke-LoginWithBackupAccounts $u $p $false
                 $labelTip.Text = $result.Message
                 if ($result.Success) {
@@ -1269,6 +1358,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
             }
         } catch {
             $labelTip.Text = '重连检测失败。'
+            Write-UiLog '重连检测异常'
         } finally {
             $script:cupLoginLastReconnectCheck = [DateTime]::Now
             $reconnectBusy = $false
@@ -1310,6 +1400,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         $notifyIcon.Visible = $false
         $notifyIcon.Dispose()
         $trayMenu.Dispose()
+        $script:cupLoginUiLogWriter = $null
         $appContext.ExitThread()
     })
 
@@ -1318,7 +1409,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         $form.Close()
     })
 
-    $form.Controls.AddRange(@($labelUser, $textUser, $labelPass, $textPass, $checkAutoStart, $checkReconnect, $labelTip, $labelActive, $buttonBackup, $buttonLogin, $buttonLogout))
+    $form.Controls.AddRange(@($labelUser, $textUser, $labelPass, $textPass, $checkAutoStart, $checkReconnect, $labelTip, $logBox, $labelActive, $buttonBackup, $buttonLogin, $buttonLogout))
     $form.AcceptButton = $buttonLogin
     if ($startInTray) {
         if ($checkReconnect.Checked) {
