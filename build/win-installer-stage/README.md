@@ -64,7 +64,7 @@ Output installer:
 What the installer does:
 
 - installs `srun.exe`, `login-cup.ps1`, `login-cup.bat`, `login-cup.vbs`
-- creates Start Menu shortcuts: `CUP Login` and `Debug login`
+- creates Start Menu shortcuts: `CUP Login` and `调试登录`
 - optional desktop shortcut and startup shortcut
 
 Installed user experience:
@@ -81,7 +81,7 @@ Runtime credential storage location (installed mode):
 
 Silent startup and reconnect are stored in the current user's Windows startup settings and can be changed from the GUI. Closing the window keeps CUP Login running in the system tray; use the tray menu to show the window or exit. Reconnect mode keeps the tray process alive and retries login only when the lightweight HTTP captive-portal check is redirected.
 
-Backup accounts are configured from the `Backup accounts...` button. CUP Login always tries the main account first; if it fails, backup accounts are tried in order without replacing the main account shown on the next launch.
+Backup accounts are configured from the `备用账号...` button. CUP Login always tries the main account first; if it fails, backup accounts are tried in order without replacing the main account shown on the next launch.
 
 ## Script Behavior
 

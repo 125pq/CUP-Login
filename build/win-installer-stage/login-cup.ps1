@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Username,
     [string]$Password,
     [string]$Server,
@@ -69,12 +69,42 @@ function Get-ResultField([string]$name) {
 function Get-LoginHintText {
     $status = Get-ResultField 'status'
     switch ($status) {
-        'failed_auth' { return 'Username or password is incorrect. Please retry.' }
-        'failed_proxy' { return 'Close proxy/VPN first, then retry CUP Login.' }
-        'failed' { return 'Last login failed. Check network/settings and retry.' }
-        'needs_credentials' { return 'Enter username and password once to enable CUP Login.' }
-        default { return 'Credentials are saved locally after successful login.' }
+        'failed_auth' { return '账号或密码错误，请重试。' }
+        'failed_proxy' { return '请先关闭代理/VPN，再重试。' }
+        'failed' { return '上次登录失败，请检查网络或设置后重试。' }
+        'needs_credentials' { return '请输入一次账号和密码以启用登录。' }
+        default { return '登录成功后会在本机保存凭据。' }
     }
+}
+
+function Get-DisplayAccountLabel([string]$label) {
+    if (-not $label -or $label -eq 'Main account') {
+        return '主账号'
+    }
+
+    $match = [regex]::Match($label, '^Backup account\s+(\d+)$')
+    if ($match.Success) {
+        return "备用账号 $($match.Groups[1].Value)"
+    }
+
+    return $label
+}
+
+function Get-MaskedPassword([string]$password) {
+    if (-not $password) {
+        return '******'
+    }
+
+    $count = [Math]::Min([Math]::Max($password.Length, 6), 12)
+    return ''.PadLeft($count, '*')
+}
+
+function Remove-OperatorSuffix([string]$username) {
+    if (-not $username) {
+        return ''
+    }
+
+    return ($username -replace '@[^@\s]+$', '')
 }
 
 function Test-ProxyOrVpnPortalError([string]$text) {
@@ -102,7 +132,7 @@ function Get-LastUsername {
     if (Test-Path $lastUsernameFile) {
         $saved = (Get-Content $lastUsernameFile -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
         if ($saved) {
-            return $saved
+            return (Remove-OperatorSuffix $saved)
         }
     }
     return ''
@@ -135,6 +165,7 @@ function Save-LastUsername([string]$value) {
     if (-not $value) {
         return
     }
+    $value = Remove-OperatorSuffix $value
     Set-Content -Path $lastUsernameFile -Value $value -Encoding ascii
 }
 
@@ -151,7 +182,7 @@ function Get-SavedCredential {
         }
 
         return @{
-            Username = [string]$obj.username
+            Username = Remove-OperatorSuffix ([string]$obj.username)
             Password = [string](Unprotect-LoginText ([string]$obj.password))
         }
     } catch {
@@ -164,6 +195,7 @@ function Save-SavedCredential([string]$username, [string]$password) {
         return
     }
 
+    $username = Remove-OperatorSuffix $username
     $payload = @{
         username = $username
         password = Protect-LoginText $password
@@ -374,12 +406,12 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
 
     Push-Location $PSScriptRoot
     try {
-        Write-ResultFile 'running' 'Login running' 'Trying campus network login...'
+        Write-ResultFile 'running' '正在登录' '正在尝试登录校园网...'
         $attempt = 0
         $totalAttempts = $servers.Count * $usernameCandidates.Count
         $lastError = ''
         $lastFailureStatus = 'failed'
-        $lastFailureMessage = "Login failed. See $lastErrorLogFile"
+        $lastFailureMessage = "登录失败，详情见 $lastErrorLogFile"
 
         foreach ($serverCandidate in $servers) {
             foreach ($usernameCandidate in $usernameCandidates) {
@@ -417,20 +449,20 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
 
                 if ($isPortalOk -and ($hasAccessToken -or $alreadyOnline)) {
                     if ($alreadyOnline) {
-                        Write-ResultFile 'already_online' 'Already online' 'Already online.'
+                        Write-ResultFile 'already_online' '已在线' '当前已在线。'
                     } else {
-                        Write-ResultFile 'success' 'Login succeeded' 'Login succeeded!'
+                        Write-ResultFile 'success' '登录成功' '登录成功！'
                     }
                     if ($saveCredentialOnSuccess) {
-                        Save-LastUsername $usernameCandidate
-                        Save-SavedCredential $usernameCandidate $inputPassword
+                        Save-LastUsername $inputUsername
+                        Save-SavedCredential $inputUsername $inputPassword
                     }
                     Set-ActiveLogin $usernameCandidate $accountLabel
 
                     return @{
                         Success = $true
                         Status = if ($alreadyOnline) { 'already_online' } else { 'success' }
-                        Message = if ($alreadyOnline) { 'Already online.' } else { 'Login succeeded!' }
+                        Message = if ($alreadyOnline) { '当前已在线。' } else { '登录成功！' }
                         Username = $usernameCandidate
                         AccountLabel = $accountLabel
                     }
@@ -441,13 +473,13 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
 
                 if (Test-ProxyOrVpnPortalError $text) {
                     $lastFailureStatus = 'failed_proxy'
-                    $lastFailureMessage = 'Close proxy/VPN first, then retry CUP Login.'
+                    $lastFailureMessage = '请先关闭代理/VPN，再重试。'
                 } elseif ($text -match 'Authentication fail|login_error|Unknow ac-type') {
                     $lastFailureStatus = 'failed_auth'
-                    $lastFailureMessage = 'Username or password is incorrect.'
+                    $lastFailureMessage = '账号或密码错误。'
                 } else {
                     $lastFailureStatus = 'failed'
-                    $lastFailureMessage = "Login failed. See $lastErrorLogFile"
+                    $lastFailureMessage = "登录失败，详情见 $lastErrorLogFile"
                 }
 
                 if ($exitCode -eq 0 -and $servers.Count -eq 1 -and $usernameCandidates.Count -eq 1) {
@@ -467,13 +499,13 @@ function Invoke-LoginAttempt([string]$inputUsername, [string]$inputPassword, [bo
         if ($clearCredentialOnFailure) {
             Clear-SavedCredential
         }
-        Write-ResultFile $lastFailureStatus 'Login failed' $lastFailureMessage
+        Write-ResultFile $lastFailureStatus '登录失败' $lastFailureMessage
 
-        $failureMessage = 'Login failed. Check network and retry.'
+        $failureMessage = '登录失败，请检查网络后重试。'
         if ($lastFailureStatus -eq 'failed_auth') {
-            $failureMessage = 'Username or password is incorrect. Please retry.'
+            $failureMessage = '账号或密码错误，请重试。'
         } elseif ($lastFailureStatus -eq 'failed_proxy') {
-            $failureMessage = 'Close proxy/VPN first, then retry CUP Login.'
+            $failureMessage = '请先关闭代理/VPN，再重试。'
         }
 
         return @{
@@ -507,23 +539,24 @@ function Invoke-LoginWithBackupAccounts([string]$inputUsername, [string]$inputPa
         }
 
         $backupLabel = "Backup account $backupIndex"
-        Write-ResultFile 'backup_running' 'Backup login running' "Trying $backupLabel..."
+        $backupLabelText = Get-DisplayAccountLabel $backupLabel
+        Write-ResultFile 'backup_running' '正在尝试备用账号' "正在尝试$backupLabelText..."
         $backupResult = Invoke-LoginAttempt ([string]$backup.Username) ([string]$backup.Password) $false $false $backupLabel
         if ($backupResult.Success) {
             Save-LastUsername $inputUsername
             Save-SavedCredential $inputUsername $inputPassword
             $backupResult['Status'] = 'backup_success'
-            $backupResult['Message'] = "Main account failed. Signed in with $backupLabel."
-            Write-ResultFile 'backup_success' 'Backup login succeeded' $backupResult['Message']
+            $backupResult['Message'] = "主账号登录失败，已使用$backupLabelText登录。"
+            Write-ResultFile 'backup_success' '备用账号登录成功' $backupResult['Message']
             return $backupResult
         }
     }
 
-    Write-ResultFile 'failed' 'Login failed' 'Main account and backup accounts all failed.'
+    Write-ResultFile 'failed' '登录失败' '主账号和备用账号均登录失败。'
     return @{
         Success = $false
         Status = 'failed'
-        Message = 'Main account and backup accounts all failed.'
+        Message = '主账号和备用账号均登录失败。'
         Username = $inputUsername
         AccountLabel = 'Main account'
     }
@@ -545,7 +578,7 @@ function Invoke-LogoutAttempt([string]$inputUsername) {
 
     Push-Location $PSScriptRoot
     try {
-        Write-ResultFile 'running' 'Logout running' 'Trying campus network logout...'
+        Write-ResultFile 'running' '正在注销' '正在尝试注销校园网...'
         $lastError = ''
 
         foreach ($serverCandidate in $servers) {
@@ -567,20 +600,20 @@ function Invoke-LogoutAttempt([string]$inputUsername) {
                 Write-ErrorLog $lastError
 
                 if ($exitCode -eq 0) {
-                    Write-ResultFile 'logout_success' 'Logout succeeded' 'Logout succeeded.'
+                    Write-ResultFile 'logout_success' '注销成功' '注销成功。'
                     return @{
                         Success = $true
-                        Message = 'Logout succeeded.'
+                        Message = '注销成功。'
                     }
                 }
             }
         }
 
         Write-ErrorLog $lastError
-        Write-ResultFile 'failed' 'Logout failed' "Logout failed. See $lastErrorLogFile"
+        Write-ResultFile 'failed' '注销失败' "注销失败，详情见 $lastErrorLogFile"
         return @{
             Success = $false
-            Message = 'Logout failed. Check network and retry.'
+            Message = '注销失败，请检查网络后重试。'
         }
     } finally {
         Pop-Location
@@ -701,11 +734,11 @@ function Clear-ReconnectNetworkEvents {
 
 function Invoke-ReconnectLoginIfNeeded([string]$inputUsername, [string]$inputPassword) {
     if (-not (Test-CaptivePortalRedirect)) {
-        Write-ResultFile 'online' 'Portal check passed' 'No captive portal redirect detected.'
+        Write-ResultFile 'online' '网络正常' '未检测到认证页重定向。'
         return $true
     }
 
-    Write-ResultFile 'reconnecting' 'Reconnect running' 'Captive portal redirect detected.'
+    Write-ResultFile 'reconnecting' '正在重连' '检测到认证页重定向。'
     $reconnectResult = Invoke-LoginWithBackupAccounts $inputUsername $inputPassword $false
     if (-not $reconnectResult.Success -and $reconnectResult.Status -eq 'failed_auth') {
         Start-InteractiveLoginWindow
@@ -717,7 +750,7 @@ function Invoke-ReconnectLoginIfNeeded([string]$inputUsername, [string]$inputPas
 
 function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
     $dialog = New-Object System.Windows.Forms.Form
-    $dialog.Text = 'Backup accounts'
+    $dialog.Text = '备用账号'
     $dialog.StartPosition = 'CenterParent'
     $dialog.FormBorderStyle = 'FixedDialog'
     $dialog.MaximizeBox = $false
@@ -737,7 +770,7 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
     $listAccounts.Size = New-Object System.Drawing.Size(190, 225)
 
     $labelBackupUser = New-Object System.Windows.Forms.Label
-    $labelBackupUser.Text = 'Username'
+    $labelBackupUser.Text = '账号'
     $labelBackupUser.Location = New-Object System.Drawing.Point(225, 20)
     $labelBackupUser.AutoSize = $true
 
@@ -746,7 +779,7 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
     $textBackupUser.Size = New-Object System.Drawing.Size(150, 20)
 
     $labelBackupPass = New-Object System.Windows.Forms.Label
-    $labelBackupPass.Text = 'Password'
+    $labelBackupPass.Text = '密码'
     $labelBackupPass.Location = New-Object System.Drawing.Point(225, 58)
     $labelBackupPass.AutoSize = $true
 
@@ -756,42 +789,42 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
     $textBackupPass.UseSystemPasswordChar = $true
 
     $labelBackupTip = New-Object System.Windows.Forms.Label
-    $labelBackupTip.Text = 'Backup accounts are tried only after the main account fails.'
+    $labelBackupTip.Text = '主账号登录失败后，才会按顺序尝试备用账号。'
     $labelBackupTip.Location = New-Object System.Drawing.Point(225, 92)
     $labelBackupTip.Size = New-Object System.Drawing.Size(230, 42)
 
     $buttonAdd = New-Object System.Windows.Forms.Button
-    $buttonAdd.Text = 'Add'
+    $buttonAdd.Text = '添加'
     $buttonAdd.Location = New-Object System.Drawing.Point(225, 145)
     $buttonAdd.Size = New-Object System.Drawing.Size(70, 28)
 
     $buttonUpdate = New-Object System.Windows.Forms.Button
-    $buttonUpdate.Text = 'Update'
+    $buttonUpdate.Text = '更新'
     $buttonUpdate.Location = New-Object System.Drawing.Point(305, 145)
     $buttonUpdate.Size = New-Object System.Drawing.Size(70, 28)
 
     $buttonDelete = New-Object System.Windows.Forms.Button
-    $buttonDelete.Text = 'Delete'
+    $buttonDelete.Text = '删除'
     $buttonDelete.Location = New-Object System.Drawing.Point(385, 145)
     $buttonDelete.Size = New-Object System.Drawing.Size(70, 28)
 
     $buttonUp = New-Object System.Windows.Forms.Button
-    $buttonUp.Text = 'Up'
+    $buttonUp.Text = '上移'
     $buttonUp.Location = New-Object System.Drawing.Point(225, 185)
     $buttonUp.Size = New-Object System.Drawing.Size(70, 28)
 
     $buttonDown = New-Object System.Windows.Forms.Button
-    $buttonDown.Text = 'Down'
+    $buttonDown.Text = '下移'
     $buttonDown.Location = New-Object System.Drawing.Point(305, 185)
     $buttonDown.Size = New-Object System.Drawing.Size(70, 28)
 
     $buttonSave = New-Object System.Windows.Forms.Button
-    $buttonSave.Text = 'Save'
+    $buttonSave.Text = '保存'
     $buttonSave.Location = New-Object System.Drawing.Point(300, 260)
     $buttonSave.Size = New-Object System.Drawing.Size(75, 30)
 
     $buttonCancel = New-Object System.Windows.Forms.Button
-    $buttonCancel.Text = 'Cancel'
+    $buttonCancel.Text = '取消'
     $buttonCancel.Location = New-Object System.Drawing.Point(385, 260)
     $buttonCancel.Size = New-Object System.Drawing.Size(75, 30)
 
@@ -801,9 +834,10 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
         for ($i = 0; $i -lt $accounts.Count; $i++) {
             $name = [string]$accounts[$i].Username
             if (-not $name) {
-                $name = '(empty username)'
+                $name = '(未填写账号)'
             }
-            [void]$listAccounts.Items.Add(("{0}. {1}" -f ($i + 1), $name))
+            $mask = Get-MaskedPassword ([string]$accounts[$i].Password)
+            [void]$listAccounts.Items.Add(("{0}. {1}  {2}" -f ($i + 1), $name, $mask))
         }
 
         if ($accounts.Count -gt 0) {
@@ -835,7 +869,7 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
         $u = $textBackupUser.Text.Trim()
         $p = $textBackupPass.Text
         if (-not $u -or -not $p) {
-            $labelBackupTip.Text = 'Please enter username and password.'
+            $labelBackupTip.Text = '请输入账号和密码。'
             return
         }
 
@@ -845,20 +879,20 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
         })
         & $refreshList
         $listAccounts.SelectedIndex = $accounts.Count - 1
-        $labelBackupTip.Text = 'Backup account added.'
+        $labelBackupTip.Text = '已添加备用账号。'
     })
 
     $buttonUpdate.Add_Click({
         $index = $listAccounts.SelectedIndex
         if ($index -lt 0 -or $index -ge $accounts.Count) {
-            $labelBackupTip.Text = 'Select a backup account first.'
+            $labelBackupTip.Text = '请先选择一个备用账号。'
             return
         }
 
         $u = $textBackupUser.Text.Trim()
         $p = $textBackupPass.Text
         if (-not $u -or -not $p) {
-            $labelBackupTip.Text = 'Please enter username and password.'
+            $labelBackupTip.Text = '请输入账号和密码。'
             return
         }
 
@@ -868,7 +902,7 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
         }
         & $refreshList
         $listAccounts.SelectedIndex = $index
-        $labelBackupTip.Text = 'Backup account updated.'
+        $labelBackupTip.Text = '已更新备用账号。'
     })
 
     $buttonDelete.Add_Click({
@@ -879,7 +913,7 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
 
         $accounts.RemoveAt($index)
         & $refreshList
-        $labelBackupTip.Text = 'Backup account deleted.'
+        $labelBackupTip.Text = '已删除备用账号。'
     })
 
     $buttonUp.Add_Click({
@@ -951,7 +985,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     $script:cupLoginAllowExit = $false
 
     $labelUser = New-Object System.Windows.Forms.Label
-    $labelUser.Text = 'Username'
+    $labelUser.Text = '账号'
     $labelUser.Location = New-Object System.Drawing.Point(20, 20)
     $labelUser.AutoSize = $true
 
@@ -963,7 +997,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     }
 
     $labelPass = New-Object System.Windows.Forms.Label
-    $labelPass.Text = 'Password'
+    $labelPass.Text = '密码'
     $labelPass.Location = New-Object System.Drawing.Point(20, 58)
     $labelPass.AutoSize = $true
 
@@ -976,13 +1010,13 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     }
 
     $checkAutoStart = New-Object System.Windows.Forms.CheckBox
-    $checkAutoStart.Text = 'Enable silent startup'
+    $checkAutoStart.Text = '开机静默启动'
     $checkAutoStart.Location = New-Object System.Drawing.Point(110, 92)
     $checkAutoStart.AutoSize = $true
     $checkAutoStart.Checked = Get-AutoStartEnabled
 
     $checkReconnect = New-Object System.Windows.Forms.CheckBox
-    $checkReconnect.Text = 'Enable reconnect'
+    $checkReconnect.Text = '断线自动重连'
     $checkReconnect.Location = New-Object System.Drawing.Point(110, 118)
     $checkReconnect.AutoSize = $true
     $checkReconnect.Checked = Get-ReconnectEnabled
@@ -1001,7 +1035,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     $updateActiveLabel = {
         $active = Get-ActiveLogin
         if ($active -and $active.Username) {
-            $labelActive.Text = "Current login: $($active.Label) ($($active.Username))"
+            $labelActive.Text = "当前登录：$(Get-DisplayAccountLabel $active.Label) ($(Remove-OperatorSuffix $active.Username))"
         } else {
             $labelActive.Text = ''
         }
@@ -1014,9 +1048,9 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     $notifyIcon.Visible = $true
 
     $trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
-    $menuShow = New-Object System.Windows.Forms.ToolStripMenuItem('Show CUP Login')
-    $menuLogin = New-Object System.Windows.Forms.ToolStripMenuItem('Login now')
-    $menuExit = New-Object System.Windows.Forms.ToolStripMenuItem('Exit')
+    $menuShow = New-Object System.Windows.Forms.ToolStripMenuItem('显示窗口')
+    $menuLogin = New-Object System.Windows.Forms.ToolStripMenuItem('立即登录')
+    $menuExit = New-Object System.Windows.Forms.ToolStripMenuItem('退出')
     [void]$trayMenu.Items.Add($menuShow)
     [void]$trayMenu.Items.Add($menuLogin)
     [void]$trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
@@ -1039,12 +1073,12 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         try {
             Set-AutoStartEnabled $checkAutoStart.Checked
             if ($checkAutoStart.Checked) {
-                $labelTip.Text = 'Silent startup enabled.'
+                $labelTip.Text = '已开启开机静默启动。'
             } else {
-                $labelTip.Text = 'Silent startup disabled.'
+                $labelTip.Text = '已关闭开机静默启动。'
             }
         } catch {
-            $labelTip.Text = 'Failed to update silent startup setting.'
+            $labelTip.Text = '更新开机静默启动设置失败。'
         }
     })
 
@@ -1052,27 +1086,27 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         try {
             Set-ReconnectEnabled $checkReconnect.Checked
             if ($checkReconnect.Checked) {
-                $labelTip.Text = 'Reconnect enabled.'
+                $labelTip.Text = '已开启断线自动重连。'
             } else {
-                $labelTip.Text = 'Reconnect disabled.'
+                $labelTip.Text = '已关闭断线自动重连。'
             }
         } catch {
-            $labelTip.Text = 'Failed to update reconnect setting.'
+            $labelTip.Text = '更新断线重连设置失败。'
         }
     })
 
     $buttonLogin = New-Object System.Windows.Forms.Button
-    $buttonLogin.Text = 'Login'
+    $buttonLogin.Text = '登录'
     $buttonLogin.Location = New-Object System.Drawing.Point(245, 245)
     $buttonLogin.Size = New-Object System.Drawing.Size(75, 30)
 
     $buttonLogout = New-Object System.Windows.Forms.Button
-    $buttonLogout.Text = 'Logout'
+    $buttonLogout.Text = '注销'
     $buttonLogout.Location = New-Object System.Drawing.Point(325, 245)
     $buttonLogout.Size = New-Object System.Drawing.Size(75, 30)
 
     $buttonBackup = New-Object System.Windows.Forms.Button
-    $buttonBackup.Text = 'Backup accounts...'
+    $buttonBackup.Text = '备用账号...'
     $buttonBackup.Location = New-Object System.Drawing.Point(20, 245)
     $buttonBackup.Size = New-Object System.Drawing.Size(140, 30)
     $runReconnectCheck = $null
@@ -1081,13 +1115,13 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         $active = Get-ActiveLogin
         $u = if ($active -and $active.Username) { [string]$active.Username } else { $textUser.Text.Trim() }
         if (-not $u) {
-            $labelTip.Text = 'Please enter username before logout.'
+            $labelTip.Text = '请先输入账号再注销。'
             return
         }
 
         $buttonLogin.Enabled = $false
         $buttonLogout.Enabled = $false
-        $labelTip.Text = 'Logging out, please wait...'
+        $labelTip.Text = '正在注销，请稍候...'
         $form.Refresh()
 
         try {
@@ -1099,11 +1133,11 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
                 if ($checkReconnect.Checked) {
                     $checkReconnect.Checked = $false
                     Set-ReconnectEnabled $false
-                    $labelTip.Text = 'Logout succeeded. Reconnect disabled.'
+                    $labelTip.Text = '注销成功，已关闭断线重连。'
                 }
             }
         } catch {
-            $labelTip.Text = 'Logout failed. Please try again.'
+            $labelTip.Text = '注销失败，请重试。'
         } finally {
             $buttonLogin.Enabled = $true
             $buttonLogout.Enabled = $true
@@ -1115,14 +1149,14 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         $p = $textPass.Text
 
         if (-not $u -or -not $p) {
-            $labelTip.Text = 'Please enter username and password.'
+            $labelTip.Text = '请输入账号和密码。'
             return
         }
 
         Set-AutoStartEnabled $checkAutoStart.Checked
 
         $buttonLogin.Enabled = $false
-        $labelTip.Text = 'Logging in, please wait...'
+        $labelTip.Text = '正在登录，请稍候...'
         $form.Refresh()
 
         try {
@@ -1136,7 +1170,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
                 $textPass.Focus()
             }
         } catch {
-            $labelTip.Text = 'Login failed. Please try again.'
+            $labelTip.Text = '登录失败，请重试。'
             $textPass.Text = ''
             $textPass.Focus()
         } finally {
@@ -1148,11 +1182,11 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         Show-BackupAccountsWindow $form
         $backupCount = @(Get-BackupCredentials).Count
         if ($backupCount -eq 0) {
-            $labelTip.Text = 'No backup accounts configured.'
+            $labelTip.Text = '未配置备用账号。'
         } elseif ($backupCount -eq 1) {
-            $labelTip.Text = '1 backup account configured.'
+            $labelTip.Text = '已配置 1 个备用账号。'
         } else {
-            $labelTip.Text = "$backupCount backup accounts configured."
+            $labelTip.Text = "已配置 $backupCount 个备用账号。"
         }
     })
 
@@ -1174,7 +1208,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         $u = $textUser.Text.Trim()
         $p = $textPass.Text
         if (-not $u -or -not $p) {
-            $labelTip.Text = 'Please enter username and password once to enable reconnect.'
+            $labelTip.Text = '请先输入并保存账号密码，再启用重连。'
             & $showWindow
             return
         }
@@ -1182,7 +1216,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         $reconnectBusy = $true
         try {
             if (Test-CaptivePortalRedirect) {
-                $labelTip.Text = 'Portal redirect detected. Reconnecting...'
+                $labelTip.Text = '检测到认证页重定向，正在重连...'
                 $result = Invoke-LoginWithBackupAccounts $u $p $false
                 $labelTip.Text = $result.Message
                 if ($result.Success) {
@@ -1193,7 +1227,7 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
                 }
             }
         } catch {
-            $labelTip.Text = 'Reconnect check failed.'
+            $labelTip.Text = '重连检测失败。'
         } finally {
             $script:cupLoginLastReconnectCheck = [DateTime]::Now
             $reconnectBusy = $false
@@ -1338,7 +1372,7 @@ if ($Tray) {
 
 if ($Silent) {
     if (-not $defaultUsername -or -not $defaultPassword) {
-        Write-ResultFile 'needs_credentials' 'Login not configured' 'Please enter username and password once to enable silent startup.'
+        Write-ResultFile 'needs_credentials' '未配置登录' '请先输入一次账号和密码，再启用开机静默启动。'
         Start-InteractiveLoginWindow
         exit 0
     }
@@ -1354,7 +1388,7 @@ if ($Silent) {
 
 if ($Reconnect) {
     if (-not $defaultUsername -or -not $defaultPassword) {
-        Write-ResultFile 'needs_credentials' 'Login not configured' 'Please enter username and password once to enable reconnect.'
+        Write-ResultFile 'needs_credentials' '未配置登录' '请先输入一次账号和密码，再启用断线重连。'
         Start-InteractiveLoginWindow
         exit 0
     }
