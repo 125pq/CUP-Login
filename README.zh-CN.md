@@ -9,7 +9,7 @@
 - Windows 一键启动脚本：`login-cup.bat`
 - CUP 定制登录脚本：`login-cup.ps1`
 - 服务器自动回退：`https://login.cup.edu.cn` -> `http://login.cup.edu.cn`
-- 用户名自动候选（无后缀和常见运营商后缀）
+- 使用原始校园网账号登录，不自动追加运营商后缀
 - 支持本地凭据缓存，实现真正双击自动登录
 
 ## 安全说明
@@ -65,7 +65,7 @@ cargo build
 
 - 安装 `srun.exe`、`login-cup.ps1`、`login-cup.bat`
 - 安装 `login-cup.vbs`（默认一键启动器）
-- 创建开始菜单快捷方式（CUP Login / Debug login）
+- 创建开始菜单快捷方式（CUP Login / 调试登录）
 - 可选创建桌面快捷方式和开机启动快捷方式
 
 安装后使用体验：
@@ -73,7 +73,7 @@ cargo build
 - 双击快捷方式即可登录，无需安装 Rust 或手动配置命令
 - 首次运行若无已保存凭据，会弹出图形化窗口输入账号密码
 - 登录成功后自动保存，下次可直接一键登录
-- 登录成功/已登录后，会弹出“开机静默自启动”开关提示
+- 图形界面提供注销按钮、备用账号管理，以及开机静默启动/断线重连开关
 
 调试参数（给脚本/自动化使用）：
 
@@ -86,6 +86,10 @@ cargo build
 - `%LOCALAPPDATA%\srun-cup\.login-cup.credential.json`
 - `%LOCALAPPDATA%\srun-cup\.login-cup.last-username`
 
+开机静默启动和断线重连会写入当前用户的 Windows 启动项，可在图形界面里勾选或取消。关闭窗口后 CUP Login 会继续在系统托盘运行，可通过托盘菜单显示窗口或真正退出。断线重连会保持托盘后台，并只在轻量 HTTP Portal 检测出现重定向时重新登录。
+
+备用账号通过 `备用账号...` 按钮管理。CUP Login 总是先尝试主账号；主账号失败后再按顺序尝试备用账号，备用账号登录成功也不会替换下次打开时显示的主账号。
+
 ## 脚本默认行为
 
 `login-cup.ps1` 默认：
@@ -93,22 +97,11 @@ cargo build
 - server：先尝试 `https://login.cup.edu.cn`，失败后回退 `http://login.cup.edu.cn`
 - IP：自动探测（`-d`）
 - 认证参数：`--acid 1 --type 1`
-- 若用户名不含 `@`，自动按顺序尝试：
-  - `username`
-  - `username@xn`
-  - `username@cmcc`
-  - `username@cucc`
-  - `username@ctcc`
+- 账号：只使用输入的原始账号，不自动追加运营商后缀
 
 常用参数示例：
 
 ```powershell
-# 强制某个后缀
-.\login-cup.ps1 -Username 学号 -Password 密码 -Operator xn
-
-# 禁用后缀尝试，只用原始用户名
-.\login-cup.ps1 -Username 学号 -Password 密码 -Operator none
-
 # 指定固定 IP
 .\login-cup.ps1 -Username 学号 -Password 密码 -Ip 10.x.x.x
 

@@ -1,4 +1,4 @@
-#define MyAppName "CUP Login"
+﻿#define MyAppName "CUP Login"
 #define MyAppPublisher "CUP Login"
 #define MyAppLauncherName "login-cup.vbs"
 #define MyAppDebugName "login-cup.bat"
@@ -38,27 +38,36 @@ UninstallDisplayIcon={app}\srun.exe
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
-Name: "autostart"; Description: "Run on Windows startup (current user)"; GroupDescription: "Startup:"; Flags: unchecked
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式："; Flags: unchecked
+Name: "autostart"; Description: "开机启动（当前用户）"; GroupDescription: "启动项："; Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}\CUP Login"; Filename: "{app}\{#MyAppLauncherName}"
-Name: "{autoprograms}\{#MyAppName}\Silent login"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--silent"
-Name: "{autoprograms}\{#MyAppName}\Debug login"; Filename: "{app}\{#MyAppDebugName}"
-Name: "{autoprograms}\{#MyAppName}\Enable silent autostart"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-on"
-Name: "{autoprograms}\{#MyAppName}\Disable silent autostart"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-off"
+Name: "{autoprograms}\{#MyAppName}\静默登录"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--silent"
+Name: "{autoprograms}\{#MyAppName}\调试登录"; Filename: "{app}\{#MyAppDebugName}"
+Name: "{autoprograms}\{#MyAppName}\开启开机静默启动"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-on"
+Name: "{autoprograms}\{#MyAppName}\关闭开机静默启动"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-off"
+Name: "{autoprograms}\{#MyAppName}\开启断线重连"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-reconnect-on"
+Name: "{autoprograms}\{#MyAppName}\关闭断线重连"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-reconnect-off"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Tasks: desktopicon
-Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--silent"; Tasks: autostart
+Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--tray"; Tasks: autostart
 
 [InstallDelete]
 Type: files; Name: "{autoprograms}\{#MyAppName}\Silent login.lnk"
 Type: files; Name: "{autoprograms}\{#MyAppName}\One-click login.lnk"
+Type: files; Name: "{autoprograms}\{#MyAppName}\Debug login.lnk"
+Type: files; Name: "{autoprograms}\{#MyAppName}\Enable silent autostart.lnk"
+Type: files; Name: "{autoprograms}\{#MyAppName}\Disable silent autostart.lnk"
+Type: files; Name: "{autoprograms}\{#MyAppName}\Enable reconnect.lnk"
+Type: files; Name: "{autoprograms}\{#MyAppName}\Disable reconnect.lnk"
 Type: files; Name: "{autoprograms}\srun-cup\Silent login.lnk"
 Type: files; Name: "{autoprograms}\srun-cup\One-click login.lnk"
 Type: dirifempty; Name: "{autoprograms}\srun-cup"
+Type: files; Name: "{userstartup}\CUP Login.lnk"
+Type: files; Name: "{userstartup}\srun-cup.lnk"
 
 [Run]
-Filename: "{app}\{#MyAppLauncherName}"; Description: "Run CUP Login now"; Flags: nowait postinstall skipifsilent shellexec
+Filename: "{app}\{#MyAppLauncherName}"; Description: "立即运行 CUP Login"; Flags: nowait postinstall skipifsilent shellexec
