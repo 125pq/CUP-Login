@@ -17,7 +17,7 @@
 
 推荐直接下载最新 Release 里的安装包：
 
-- [CUP Login 0.9.1](https://github.com/125pq/srun-CUP/releases/tag/v0.9.1)
+- [CUP Login 0.9.1](https://github.com/125pq/CUP-Login/releases/tag/v0.9.1)
 - 安装包文件：`srun-cup-setup-0.9.1.exe`
 
 安装后可以从开始菜单或桌面快捷方式打开 `CUP Login`。
