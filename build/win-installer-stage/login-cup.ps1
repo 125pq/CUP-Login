@@ -31,6 +31,7 @@ $autoStartFlagFile = Join-Path $stateRoot 'silent-startup.enabled'
 $reconnectFlagFile = Join-Path $stateRoot 'reconnect.enabled'
 $lastResultFile = Join-Path $stateRoot 'login-last-result.txt'
 $lastErrorLogFile = Join-Path $stateRoot 'login-last-error.log'
+$runSubKey = 'Software\Microsoft\Windows\CurrentVersion\Run'
 
 if (-not (Test-Path $stateRoot)) {
     New-Item -Path $stateRoot -ItemType Directory -Force | Out-Null
@@ -299,6 +300,49 @@ function Get-ReconnectCommand {
     return '"wscript.exe" //B //Nologo "' + (Join-Path $PSScriptRoot 'login-cup.vbs') + '" --tray'
 }
 
+function Get-RunValue([string]$name) {
+    $key = $null
+    try {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runSubKey, $false)
+        if ($null -eq $key) {
+            return $null
+        }
+        return [string]$key.GetValue($name, $null)
+    } catch {
+        return $null
+    } finally {
+        if ($null -ne $key) {
+            $key.Close()
+        }
+    }
+}
+
+function Set-RunValue([string]$name, [string]$value) {
+    $key = $null
+    try {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($runSubKey)
+        $key.SetValue($name, $value, [Microsoft.Win32.RegistryValueKind]::String)
+    } finally {
+        if ($null -ne $key) {
+            $key.Close()
+        }
+    }
+}
+
+function Remove-RunValue([string]$name) {
+    $key = $null
+    try {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runSubKey, $true)
+        if ($null -ne $key) {
+            $key.DeleteValue($name, $false)
+        }
+    } finally {
+        if ($null -ne $key) {
+            $key.Close()
+        }
+    }
+}
+
 function Get-AutoStartEnabled {
     if (Test-Path $autoStartFlagFile) {
         return $true
@@ -311,35 +355,29 @@ function Get-AutoStartEnabled {
         return $true
     }
 
-    try {
-        $value = (Get-ItemProperty -Path $runPath -Name 'CUP Login' -ErrorAction Stop).'CUP Login'
-        return ($value -and $value -match 'login-cup\.vbs')
-    } catch {
-        try {
-            $legacyValue = (Get-ItemProperty -Path $runPath -Name 'srun-cup' -ErrorAction Stop).'srun-cup'
-            return ($legacyValue -and $legacyValue -match 'login-cup\.vbs')
-        } catch {
-            return $false
-        }
+    $value = Get-RunValue 'CUP Login'
+    if ($value -and $value -match 'login-cup\.vbs') {
+        return $true
     }
+
+    $legacyValue = Get-RunValue 'srun-cup'
+    return ($legacyValue -and $legacyValue -match 'login-cup\.vbs')
 }
 
 function Update-TrayStartupEntry {
-    $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'CUP Login.lnk'
     $legacyStartupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'srun-cup.lnk'
     $cmd = Get-AutoStartCommand
     $enabled = (Test-Path $autoStartFlagFile) -or (Test-Path $reconnectFlagFile)
 
     if ($enabled) {
-        New-Item -Path $runPath -Force | Out-Null
-        Set-ItemProperty -Path $runPath -Name 'CUP Login' -Value $cmd
-        Remove-ItemProperty -Path $runPath -Name 'CUP Login Reconnect' -ErrorAction SilentlyContinue
-        Remove-ItemProperty -Path $runPath -Name 'srun-cup' -ErrorAction SilentlyContinue
+        Set-RunValue 'CUP Login' $cmd
+        Remove-RunValue 'CUP Login Reconnect'
+        Remove-RunValue 'srun-cup'
     } else {
-        Remove-ItemProperty -Path $runPath -Name 'CUP Login' -ErrorAction SilentlyContinue
-        Remove-ItemProperty -Path $runPath -Name 'CUP Login Reconnect' -ErrorAction SilentlyContinue
-        Remove-ItemProperty -Path $runPath -Name 'srun-cup' -ErrorAction SilentlyContinue
+        Remove-RunValue 'CUP Login'
+        Remove-RunValue 'CUP Login Reconnect'
+        Remove-RunValue 'srun-cup'
         Remove-Item -Path $startupShortcut -ErrorAction SilentlyContinue
         Remove-Item -Path $legacyStartupShortcut -ErrorAction SilentlyContinue
     }
@@ -1151,19 +1189,24 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
             return
         }
 
-        Set-AutoStartEnabled $checkAutoStart.Checked
-
         $buttonLogin.Enabled = $false
         $labelTip.Text = '正在登录，请稍候...'
         $form.Refresh()
 
+        $startupWarning = ''
+        try {
+            Set-AutoStartEnabled $checkAutoStart.Checked
+        } catch {
+            $startupWarning = ' 启动项设置保存失败。'
+        }
+
         try {
             $result = Invoke-LoginWithBackupAccounts $u $p
             if ($result.Success) {
-                $labelTip.Text = $result.Message
+                $labelTip.Text = $result.Message + $startupWarning
                 & $updateActiveLabel
             } else {
-                $labelTip.Text = $result.Message
+                $labelTip.Text = $result.Message + $startupWarning
                 $textPass.Text = ''
                 $textPass.Focus()
             }
