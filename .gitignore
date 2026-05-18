@@ -5,3 +5,5 @@
 /.vscode
 /.login-cup.credential.json
 /.login-cup.last-username
+/build/release/*.exe
+/build/win-installer-stage/srun.exe

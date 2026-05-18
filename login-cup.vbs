@@ -1,6 +1,6 @@
 Option Explicit
 
-Dim shell, fso, scriptDir, ps1Path, stateRoot, resultPath, errorLogPath
+Dim shell, fso, scriptDir, ps1Path, stateRoot, resultPath, errorLogPath, autoStartFlagPath, reconnectFlagPath
 Dim cmd, i, arg, exitCode, windowStyle, statusText, titleText, messageText, detailText
 Dim runKey, runValueName, reconnectRunValueName, legacyRunValueName, autostartCmd, reconnectCmd, silentMode, reconnectMode, trayMode, forceAutoStartMode, forceReconnectMode
 Set shell = CreateObject("WScript.Shell")
@@ -8,6 +8,8 @@ Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 ps1Path = scriptDir & "\login-cup.ps1"
 stateRoot = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\srun-cup"
+autoStartFlagPath = stateRoot & "\silent-startup.enabled"
+reconnectFlagPath = stateRoot & "\reconnect.enabled"
 runKey = "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\"
 runValueName = "CUP Login"
 reconnectRunValueName = "CUP Login Reconnect"
@@ -81,12 +83,14 @@ WScript.Quit exitCode
 Sub SetAutoStart(enableIt)
     On Error Resume Next
     If enableIt Then
+        Call WriteFlag(autoStartFlagPath)
         shell.RegWrite runKey & runValueName, autostartCmd, "REG_SZ"
         shell.RegDelete runKey & legacyRunValueName
         If Err.Number <> 0 Then
             Err.Clear
         End If
     Else
+        Call DeleteFlag(autoStartFlagPath)
         shell.RegDelete runKey & runValueName
         If Err.Number <> 0 Then
             Err.Clear
@@ -102,12 +106,49 @@ End Sub
 Sub SetReconnect(enableIt)
     On Error Resume Next
     If enableIt Then
+        Call WriteFlag(reconnectFlagPath)
         shell.RegWrite runKey & reconnectRunValueName, reconnectCmd, "REG_SZ"
     Else
+        Call DeleteFlag(reconnectFlagPath)
         shell.RegDelete runKey & reconnectRunValueName
         If Err.Number <> 0 Then
             Err.Clear
         End If
+    End If
+    On Error GoTo 0
+End Sub
+
+Sub EnsureStateRoot()
+    On Error Resume Next
+    If Not fso.FolderExists(stateRoot) Then
+        fso.CreateFolder stateRoot
+    End If
+    If Err.Number <> 0 Then
+        Err.Clear
+    End If
+    On Error GoTo 0
+End Sub
+
+Sub WriteFlag(flagPath)
+    On Error Resume Next
+    Call EnsureStateRoot()
+    Dim stream
+    Set stream = fso.CreateTextFile(flagPath, True, False)
+    stream.Write "enabled"
+    stream.Close
+    If Err.Number <> 0 Then
+        Err.Clear
+    End If
+    On Error GoTo 0
+End Sub
+
+Sub DeleteFlag(flagPath)
+    On Error Resume Next
+    If fso.FileExists(flagPath) Then
+        fso.DeleteFile flagPath, True
+    End If
+    If Err.Number <> 0 Then
+        Err.Clear
     End If
     On Error GoTo 0
 End Sub

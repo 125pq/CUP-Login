@@ -13,6 +13,7 @@
     [switch]$Tray,
     [int]$ReconnectInterval = 5,
     [switch]$DetectIp = $true,
+    [string]$BackupTestFile,
     [string]$BuildMode = 'auto'
 )
 
@@ -47,19 +48,53 @@ function Write-ResultFile([string]$status, [string]$title, [string]$message) {
     Set-Content -Path $lastResultFile -Value $lines -Encoding utf8
 }
 
+function Protect-LogSecrets([string]$content) {
+    if ([string]::IsNullOrWhiteSpace($content)) {
+        return $content
+    }
+
+    $sanitized = $content
+    $sanitized = [regex]::Replace($sanitized, '(?im)(password\s*:\s*")([^"]*)(")', '$1******$3')
+    $sanitized = [regex]::Replace($sanitized, '(?im)("password"\s*:\s*")([^"]*)(")', '$1******$3')
+    $sanitized = [regex]::Replace($sanitized, '(?im)(password\s*=\s*)([^\s&]+)', '$1******')
+    $sanitized = [regex]::Replace($sanitized, '(?im)(\s-p\s+)("[^"]*"|\S+)', '$1******')
+    $sanitized = [regex]::Replace($sanitized, '(?im)(\s--password\s+)("[^"]*"|\S+)', '$1******')
+    return $sanitized
+}
+
 function Write-ErrorLog([string]$content) {
     if ([string]::IsNullOrWhiteSpace($content)) {
         $content = "No detailed error output was captured."
     }
+    $content = Protect-LogSecrets $content
     $header = "[" + [DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss') + "]"
     Set-Content -Path $lastErrorLogFile -Value ($header + "`r`n" + $content) -Encoding utf8
 }
 
 $script:cupLoginUiLogWriter = $null
+$script:cupLoginBackupTestTimers = New-Object System.Collections.ArrayList
+$script:cupLoginBackupTestStates = @{}
 
 function Write-UiLog([string]$message) {
     if ([string]::IsNullOrWhiteSpace($message)) {
         return
+    }
+
+    if ($null -ne $script:cupLoginForm -and $script:cupLoginForm.InvokeRequired) {
+        try {
+            $callback = [System.Action[string]]{
+                param([string]$uiMessage)
+                if ($null -ne $script:cupLoginUiLogWriter) {
+                    try {
+                        & $script:cupLoginUiLogWriter $uiMessage
+                    } catch {
+                    }
+                }
+            }
+            [void]$script:cupLoginForm.BeginInvoke($callback, @($message))
+            return
+        } catch {
+        }
     }
 
     if ($null -ne $script:cupLoginUiLogWriter) {
@@ -68,6 +103,24 @@ function Write-UiLog([string]$message) {
         } catch {
         }
     }
+}
+
+function Set-CupLoginAppUserModelId {
+    $type = 'CupLoginShell.AppUserModelId'
+    if (-not ($type -as [type])) {
+        Add-Type -TypeDefinition @'
+namespace CupLoginShell {
+    using System.Runtime.InteropServices;
+
+    public static class AppUserModelId {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+        public static extern void SetCurrentProcessExplicitAppUserModelID(string appId);
+    }
+}
+'@ -ErrorAction Stop
+    }
+
+    [CupLoginShell.AppUserModelId]::SetCurrentProcessExplicitAppUserModelID('CUPLogin.CUPLogin')
 }
 
 function Get-ResultField([string]$name) {
@@ -220,6 +273,22 @@ function Save-SavedCredential([string]$username, [string]$password) {
     Set-Content -Path $savedCredentialFile -Value $payload -Encoding ascii
 }
 
+function Get-BackupTestMark([string]$status) {
+    switch ($status) {
+        'ok' { return [char]0x221A }
+        'failed' { return [char]0x00D7 }
+        default { return [char]0x25CF }
+    }
+}
+
+function Get-BackupTestStatus([string]$status) {
+    switch ($status) {
+        'ok' { return 'ok' }
+        'failed' { return 'failed' }
+        default { return 'untested' }
+    }
+}
+
 function Clear-SavedCredential {
     Remove-Item -Path $savedCredentialFile -ErrorAction SilentlyContinue
 }
@@ -241,6 +310,8 @@ function Get-BackupCredentials {
             $accounts += [pscustomobject]@{
                 Username = [string]$item.username
                 Password = [string](Unprotect-LoginText ([string]$item.password))
+                TestStatus = Get-BackupTestStatus ([string]$item.test_status)
+                TestTime = if ($item.test_time) { [string]$item.test_time } else { '' }
             }
         }
     } catch {
@@ -260,6 +331,8 @@ function Save-BackupCredentials([object[]]$accounts) {
         $payloadAccounts += [pscustomobject]@{
             username = [string]$account.Username
             password = Protect-LoginText ([string]$account.Password)
+            test_status = Get-BackupTestStatus ([string]$account.TestStatus)
+            test_time = if ($account.TestTime) { [string]$account.TestTime } else { '' }
         }
     }
 
@@ -395,6 +468,27 @@ function Update-TrayStartupEntry {
         Remove-RunValue 'srun-cup'
         Remove-Item -Path $startupShortcut -ErrorAction SilentlyContinue
         Remove-Item -Path $legacyStartupShortcut -ErrorAction SilentlyContinue
+    }
+}
+
+function Sync-LegacyStartupState {
+    $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'CUP Login.lnk'
+    $legacyStartupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'srun-cup.lnk'
+    $autoStartValue = Get-RunValue 'CUP Login'
+    $legacyAutoStartValue = Get-RunValue 'srun-cup'
+    $reconnectValue = Get-RunValue 'CUP Login Reconnect'
+
+    if ((-not (Test-Path $autoStartFlagFile)) -and (
+        (Test-Path $startupShortcut) -or
+        (Test-Path $legacyStartupShortcut) -or
+        ($autoStartValue -and $autoStartValue -match 'login-cup\.vbs') -or
+        ($legacyAutoStartValue -and $legacyAutoStartValue -match 'login-cup\.vbs')
+    )) {
+        Set-Content -Path $autoStartFlagFile -Value 'enabled' -Encoding ascii
+    }
+
+    if ((-not (Test-Path $reconnectFlagFile)) -and ($reconnectValue -and $reconnectValue -match 'login-cup\.vbs')) {
+        Set-Content -Path $reconnectFlagFile -Value 'enabled' -Encoding ascii
     }
 }
 
@@ -692,6 +786,28 @@ function Invoke-LogoutAttempt([string]$inputUsername) {
     }
 }
 
+function Test-CaptivePortalLocation([string]$sourceUrl, [string]$location) {
+    if ([string]::IsNullOrWhiteSpace($location)) {
+        return $false
+    }
+
+    try {
+        $source = [Uri]$sourceUrl
+        $target = [Uri]$location
+        if ($target.Host -eq $source.Host) {
+            return $false
+        }
+
+        if ($target.Host -match '(^|\.)login\.cup\.edu\.cn$') {
+            return $true
+        }
+
+        return ($target.AbsoluteUri -match '(?i)srun|portal|eportal|userportal|ac_id|wlanuserip')
+    } catch {
+        return ($location -match '(?i)login\.cup\.edu\.cn|srun|portal|eportal|userportal|ac_id|wlanuserip')
+    }
+}
+
 function Test-CaptivePortalEndpoint([string]$url, [int]$expectedStatus, [string]$expectedBody) {
     try {
         $request = [System.Net.HttpWebRequest]::Create($url)
@@ -720,9 +836,10 @@ function Test-CaptivePortalEndpoint([string]$url, [int]$expectedStatus, [string]
             $location = $response.Headers['Location']
 
             if ($status -ge 300 -and $status -lt 400) {
+                $isPortalRedirect = Test-CaptivePortalLocation $url $location
                 return @{
                     Online = $false
-                    Redirected = $true
+                    Redirected = $isPortalRedirect
                     Status = $status
                     Location = $location
                 }
@@ -772,11 +889,17 @@ function Test-CaptivePortalEndpoint([string]$url, [int]$expectedStatus, [string]
 
 function Test-CaptivePortalRedirect {
     $checks = @(
+        @{ Url = 'http://www.msftconnecttest.com/connecttest.txt'; Status = 200; Body = 'Microsoft Connect Test' },
+        @{ Url = 'http://connectivitycheck.gstatic.com/generate_204'; Status = 204; Body = '' },
         @{ Url = 'http://connect.rom.miui.com/generate_204'; Status = 204; Body = '' }
     )
 
     foreach ($check in $checks) {
         $result = Test-CaptivePortalEndpoint $check.Url $check.Status $check.Body
+        if ($result.Online) {
+            return $false
+        }
+
         if ($result.Redirected) {
             Write-UiLog '检测到认证页重定向'
             return $true
@@ -821,7 +944,7 @@ function Invoke-ReconnectLoginIfNeeded([string]$inputUsername, [string]$inputPas
     return $true
 }
 
-function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
+function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner, [string]$mainUsername, [string]$mainPassword, [scriptblock]$setReconnectUi) {
     $dialog = New-Object System.Windows.Forms.Form
     $dialog.Text = '备用账号'
     $dialog.StartPosition = 'CenterParent'
@@ -835,12 +958,15 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
         [void]$accounts.Add([pscustomobject]@{
             Username = [string]$account.Username
             Password = [string]$account.Password
+            TestStatus = Get-BackupTestStatus ([string]$account.TestStatus)
+            TestTime = if ($account.TestTime) { [string]$account.TestTime } else { '' }
         })
     }
 
     $listAccounts = New-Object System.Windows.Forms.ListBox
     $listAccounts.Location = New-Object System.Drawing.Point(15, 15)
     $listAccounts.Size = New-Object System.Drawing.Size(190, 225)
+    $listAccounts.Font = New-Object System.Drawing.Font('Consolas', 9)
 
     $labelBackupUser = New-Object System.Windows.Forms.Label
     $labelBackupUser.Text = '账号'
@@ -891,6 +1017,11 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
     $buttonDown.Location = New-Object System.Drawing.Point(305, 185)
     $buttonDown.Size = New-Object System.Drawing.Size(70, 28)
 
+    $buttonTest = New-Object System.Windows.Forms.Button
+    $buttonTest.Text = '测试'
+    $buttonTest.Location = New-Object System.Drawing.Point(385, 185)
+    $buttonTest.Size = New-Object System.Drawing.Size(70, 28)
+
     $buttonSave = New-Object System.Windows.Forms.Button
     $buttonSave.Text = '保存'
     $buttonSave.Location = New-Object System.Drawing.Point(300, 260)
@@ -910,7 +1041,8 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
                 $name = '(未填写账号)'
             }
             $mask = Get-MaskedPassword ([string]$accounts[$i].Password)
-            [void]$listAccounts.Items.Add(("{0}. {1}  {2}" -f ($i + 1), $name, $mask))
+            $mark = Get-BackupTestMark ([string]$accounts[$i].TestStatus)
+            [void]$listAccounts.Items.Add(("{0} {1}   {2}" -f $mark, $name, $mask))
         }
 
         if ($accounts.Count -gt 0) {
@@ -949,6 +1081,8 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
         [void]$accounts.Add([pscustomobject]@{
             Username = $u
             Password = $p
+            TestStatus = 'untested'
+            TestTime = ''
         })
         & $refreshList
         $listAccounts.SelectedIndex = $accounts.Count - 1
@@ -972,6 +1106,8 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
         $accounts[$index] = [pscustomobject]@{
             Username = $u
             Password = $p
+            TestStatus = 'untested'
+            TestTime = ''
         }
         & $refreshList
         $listAccounts.SelectedIndex = $index
@@ -1015,6 +1151,200 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
         $listAccounts.SelectedIndex = $index + 1
     })
 
+    $buttonTest.Add_Click({
+        $index = $listAccounts.SelectedIndex
+        if ($index -lt 0 -or $index -ge $accounts.Count) {
+            $labelBackupTip.Text = '请先选择一个备用账号。'
+            return
+        }
+
+        $backupUsername = [string]$accounts[$index].Username
+        $backupPassword = [string]$accounts[$index].Password
+        if (-not $backupUsername -or -not $backupPassword) {
+            $labelBackupTip.Text = '备用账号或密码为空。'
+            return
+        }
+
+        $mainUsernameForRestore = Remove-OperatorSuffix $mainUsername
+        $mainPasswordForRestore = $mainPassword
+        if (-not $mainUsernameForRestore -or -not $mainPasswordForRestore) {
+            $savedCredential = Get-SavedCredential
+            if ($savedCredential) {
+                $mainUsernameForRestore = [string]$savedCredential.Username
+                $mainPasswordForRestore = [string]$savedCredential.Password
+            }
+        }
+
+        $buttons = @($buttonAdd, $buttonUpdate, $buttonDelete, $buttonUp, $buttonDown, $buttonTest, $buttonSave, $buttonCancel)
+        foreach ($button in $buttons) {
+            $button.Enabled = $false
+        }
+        $labelBackupTip.Text = '正在测试，请稍候...'
+        $wasReconnectEnabled = Get-ReconnectEnabled
+        if ($setReconnectUi) {
+            & $setReconnectUi $false
+        }
+
+        $testId = [Guid]::NewGuid().ToString('N')
+        $testFile = Join-Path $stateRoot "backup-test-$testId.json"
+        $resultFile = Join-Path $stateRoot "backup-test-$testId.result.json"
+        $payload = [pscustomobject]@{
+            backup_username = [string]$backupUsername
+            backup_password = Protect-LoginText ([string]$backupPassword)
+            main_username = [string]$mainUsernameForRestore
+            main_password = Protect-LoginText ([string]$mainPasswordForRestore)
+            restore_reconnect = if ($wasReconnectEnabled) { 'true' } else { 'false' }
+            result_path = $resultFile
+        }
+        $payload | ConvertTo-Json -Depth 4 | Set-Content -Path $testFile -Encoding UTF8
+
+        $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { Join-Path $PSScriptRoot 'login-cup.ps1' }
+        $arguments = @(
+            '-WindowStyle', 'Hidden',
+            '-STA',
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-File', ('"' + $scriptPath.Replace('"', '""') + '"'),
+            '-BackupTestFile', ('"' + $testFile.Replace('"', '""') + '"')
+        )
+        try {
+            Write-UiLog "开始测试备用账号：$(Remove-OperatorSuffix $backupUsername)"
+            $testProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -PassThru
+        } catch {
+            if ($setReconnectUi) {
+                & $setReconnectUi $wasReconnectEnabled
+            }
+            foreach ($button in $buttons) {
+                $button.Enabled = $true
+            }
+            Remove-Item -Path $testFile, $resultFile -ErrorAction SilentlyContinue
+            $labelBackupTip.Text = '测试启动失败。'
+            return
+        }
+
+        $pollTimer = New-Object System.Windows.Forms.Timer
+        $pollTimer.Interval = 500
+        $timerKey = [string]$pollTimer.GetHashCode()
+        $script:cupLoginBackupTestStates[$timerKey] = [pscustomobject]@{
+            TestFile = $testFile
+            ResultFile = $resultFile
+            Process = $testProcess
+            StartedAt = [DateTime]::Now
+            RestoreReconnect = [bool]$wasReconnectEnabled
+            SetReconnectUi = $setReconnectUi
+            Buttons = $buttons
+            Label = $labelBackupTip
+            Accounts = $accounts
+            Index = [int]$index
+            RefreshList = $refreshList
+            List = $listAccounts
+        }
+        [void]$script:cupLoginBackupTestTimers.Add($pollTimer)
+        $pollTimer.Add_Tick({
+            param($sender, $eventArgs)
+
+            $stateKey = [string]$sender.GetHashCode()
+            $state = $script:cupLoginBackupTestStates[$stateKey]
+            if (-not $state) {
+                $sender.Stop()
+                $sender.Dispose()
+                [void]$script:cupLoginBackupTestTimers.Remove($sender)
+                return
+            }
+
+            $hasResult = ($state.ResultFile -and (Test-Path $state.ResultFile))
+            try {
+                $state.Process.Refresh()
+            } catch {
+            }
+
+            $processExited = $true
+            try {
+                $processExited = [bool]$state.Process.HasExited
+            } catch {
+                $processExited = $true
+            }
+
+            $timedOut = (([DateTime]::Now - $state.StartedAt).TotalSeconds -ge 120)
+            if ((-not $hasResult) -and (-not $processExited) -and (-not $timedOut)) {
+                return
+            }
+
+            $sender.Stop()
+            $sender.Dispose()
+            [void]$script:cupLoginBackupTestTimers.Remove($sender)
+            $script:cupLoginBackupTestStates.Remove($stateKey)
+            if ($state.SetReconnectUi) {
+                & $state.SetReconnectUi ([bool]$state.RestoreReconnect)
+            }
+            foreach ($button in @($state.Buttons)) {
+                $button.Enabled = $true
+            }
+
+            if ($timedOut -and (-not $hasResult)) {
+                try {
+                    if (-not $state.Process.HasExited) {
+                        $state.Process.Kill()
+                    }
+                } catch {
+                }
+                Remove-Item -Path @($state.TestFile, $state.ResultFile) -ErrorAction SilentlyContinue
+                $state.Label.Text = '测试超时，请稍后重试。'
+                Write-UiLog '备用账号测试超时'
+                return
+            }
+
+            $result = $null
+            if ($hasResult) {
+                try {
+                    $result = Get-Content -Path $state.ResultFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                } catch {
+                    $result = $null
+                }
+            }
+            Remove-Item -Path @($state.TestFile, $state.ResultFile) -ErrorAction SilentlyContinue
+
+            if (-not $result) {
+                $state.Label.Text = '测试失败，请检查备用账号。'
+                Write-UiLog '备用账号测试未返回结果'
+                return
+            }
+
+            $resultIndex = [int]$state.Index
+            if ($resultIndex -lt 0 -or $resultIndex -ge $state.Accounts.Count) {
+                $state.Label.Text = '测试已完成，但账号列表已变化。'
+                return
+            }
+
+            if ([bool]$result.backup_success) {
+                $state.Accounts[$resultIndex].TestStatus = 'ok'
+                $state.Accounts[$resultIndex].TestTime = [DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss')
+                Save-BackupCredentials @($state.Accounts)
+                & $state.RefreshList
+                $state.List.SelectedIndex = $resultIndex
+                if ([bool]$result.restore_success) {
+                    $state.Label.Text = '测试成功，已切回主账号。'
+                } elseif ([bool]$result.has_main_credential) {
+                    $state.Label.Text = '测试成功，但切回主账号失败；当前可能仍在备用账号。'
+                } else {
+                    $state.Label.Text = '测试成功，请手动登录主账号。'
+                }
+            } else {
+                $state.Accounts[$resultIndex].TestStatus = 'failed'
+                $state.Accounts[$resultIndex].TestTime = [DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss')
+                Save-BackupCredentials @($state.Accounts)
+                & $state.RefreshList
+                $state.List.SelectedIndex = $resultIndex
+                if ([bool]$result.restore_success) {
+                    $state.Label.Text = '测试失败，已切回主账号。'
+                } else {
+                    $state.Label.Text = '测试失败，请检查备用账号。'
+                }
+            }
+        })
+        $pollTimer.Start()
+    })
+
     $buttonSave.Add_Click({
         $toSave = @()
         foreach ($account in $accounts) {
@@ -1030,7 +1360,7 @@ function Show-BackupAccountsWindow([System.Windows.Forms.Form]$owner) {
         $dialog.Close()
     })
 
-    $dialog.Controls.AddRange(@($listAccounts, $labelBackupUser, $textBackupUser, $labelBackupPass, $textBackupPass, $labelBackupTip, $buttonAdd, $buttonUpdate, $buttonDelete, $buttonUp, $buttonDown, $buttonSave, $buttonCancel))
+    $dialog.Controls.AddRange(@($listAccounts, $labelBackupUser, $textBackupUser, $labelBackupPass, $textBackupPass, $labelBackupTip, $buttonAdd, $buttonUpdate, $buttonDelete, $buttonUp, $buttonDown, $buttonTest, $buttonSave, $buttonCancel))
     $dialog.AcceptButton = $buttonSave
     $dialog.CancelButton = $buttonCancel
     & $refreshList
@@ -1045,6 +1375,10 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         throw
     }
     [System.Windows.Forms.Application]::EnableVisualStyles()
+    try {
+        Set-CupLoginAppUserModelId
+    } catch {
+    }
 
     $appContext = New-Object System.Windows.Forms.ApplicationContext
     $form = New-Object System.Windows.Forms.Form
@@ -1055,7 +1389,19 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     $form.MinimizeBox = $false
     $form.ClientSize = New-Object System.Drawing.Size(420, 420)
     $form.TopMost = $true
+    $form.ShowInTaskbar = $true
     $script:cupLoginAllowExit = $false
+
+    $appIcon = $null
+    $iconPath = Join-Path $PSScriptRoot 'cup-login.ico'
+    if (Test-Path $iconPath) {
+        try {
+            $appIcon = New-Object System.Drawing.Icon($iconPath)
+            $form.Icon = $appIcon
+        } catch {
+            $appIcon = $null
+        }
+    }
 
     $labelUser = New-Object System.Windows.Forms.Label
     $labelUser.Text = '账号'
@@ -1149,7 +1495,11 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     & $updateActiveLabel
 
     $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
-    $notifyIcon.Icon = [System.Drawing.SystemIcons]::Application
+    if ($null -ne $appIcon) {
+        $notifyIcon.Icon = $appIcon
+    } else {
+        $notifyIcon.Icon = [System.Drawing.SystemIcons]::Application
+    }
     $notifyIcon.Text = 'CUP Login'
     $notifyIcon.Visible = $true
 
@@ -1304,7 +1654,11 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
     })
 
     $buttonBackup.Add_Click({
-        Show-BackupAccountsWindow $form
+        $setReconnectUi = {
+            param($enabled)
+            $checkReconnect.Checked = [bool]$enabled
+        }
+        Show-BackupAccountsWindow $form $textUser.Text.Trim() $textPass.Text $setReconnectUi
         $backupCount = @(Get-BackupCredentials).Count
         if ($backupCount -eq 0) {
             $labelTip.Text = '未配置备用账号。'
@@ -1399,6 +1753,9 @@ function Show-LoginWindow([string]$defaultUsername, [string]$defaultPassword, [b
         Clear-ReconnectNetworkEvents
         $notifyIcon.Visible = $false
         $notifyIcon.Dispose()
+        if ($null -ne $appIcon) {
+            $appIcon.Dispose()
+        }
         $trayMenu.Dispose()
         $script:cupLoginUiLogWriter = $null
         $appContext.ExitThread()
@@ -1482,11 +1839,68 @@ function Start-InteractiveLoginWindow {
     Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $PSScriptRoot | Out-Null
 }
 
+function Invoke-BackupAccountTestFile([string]$testFile) {
+    $payload = Get-Content -Path $testFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $backupUsername = [string]$payload.backup_username
+    $backupPassword = Unprotect-LoginText ([string]$payload.backup_password)
+    $mainUsername = [string]$payload.main_username
+    $mainPassword = Unprotect-LoginText ([string]$payload.main_password)
+    $resultPath = [string]$payload.result_path
+    $restoreReconnect = ([string]$payload.restore_reconnect -eq 'true')
+
+    $backupResult = $null
+    $restoreResult = $null
+    try {
+        Set-ReconnectEnabled $false
+
+        $active = Get-ActiveLogin
+        $logoutUsername = if ($active -and $active.Username) { [string]$active.Username } elseif ($mainUsername) { $mainUsername } else { $backupUsername }
+        if ($logoutUsername) {
+            [void](Invoke-LogoutAttempt $logoutUsername)
+        }
+
+        $backupResult = Invoke-LoginAttempt $backupUsername $backupPassword $false $false 'Backup account test'
+        if ($backupResult -and $backupResult.Success) {
+            [void](Invoke-LogoutAttempt $backupUsername)
+        }
+
+        if ($mainUsername -and $mainPassword) {
+            $restoreResult = Invoke-LoginAttempt $mainUsername $mainPassword $false $true 'Main account'
+        }
+
+        $result = [pscustomobject]@{
+            backup_success = [bool]($backupResult -and $backupResult.Success)
+            restore_success = [bool]($restoreResult -and $restoreResult.Success)
+            has_main_credential = [bool]($mainUsername -and $mainPassword)
+            restore_reconnect = [bool]$restoreReconnect
+            error = ''
+        }
+    } catch {
+        $result = [pscustomobject]@{
+            backup_success = $false
+            restore_success = [bool]($restoreResult -and $restoreResult.Success)
+            has_main_credential = [bool]($mainUsername -and $mainPassword)
+            restore_reconnect = [bool]$restoreReconnect
+            error = ($_ | Out-String)
+        }
+    } finally {
+        Set-ReconnectEnabled $restoreReconnect
+    }
+
+    $result | ConvertTo-Json -Depth 4 | Set-Content -Path $resultPath -Encoding UTF8
+}
+
 $savedCredential = Get-SavedCredential
 
 $defaultUsername = if ($Username) { $Username } elseif ($savedCredential -and $savedCredential.Username) { $savedCredential.Username } else { Get-LastUsername }
 $defaultPassword = if ($Password) { $Password } elseif ($savedCredential -and $savedCredential.Password) { $savedCredential.Password } else { '' }
 
+if ($BackupTestFile) {
+    Invoke-BackupAccountTestFile $BackupTestFile
+    exit 0
+}
+
+Sync-LegacyStartupState
 Update-TrayStartupEntry
 
 if ($Tray) {

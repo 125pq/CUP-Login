@@ -47,6 +47,9 @@ Push-Location $repoRoot
 try {
     Write-Host "Building srun.exe for $TargetTriple (release, feature=tls)"
     cargo build --release --target $TargetTriple --features tls
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo build failed with exit code $LASTEXITCODE"
+    }
 
     $builtExe = Join-Path $repoRoot "target\$TargetTriple\release\srun.exe"
     if (-not (Test-Path $builtExe)) {
@@ -64,8 +67,8 @@ try {
     Copy-Item (Join-Path $repoRoot 'login-cup.ps1') (Join-Path $stageDir 'login-cup.ps1') -Force
     Copy-Item (Join-Path $repoRoot 'login-cup.bat') (Join-Path $stageDir 'login-cup.bat') -Force
     Copy-Item (Join-Path $repoRoot 'login-cup.vbs') (Join-Path $stageDir 'login-cup.vbs') -Force
+    Copy-Item (Join-Path $repoRoot 'cup-login.ico') (Join-Path $stageDir 'cup-login.ico') -Force
     Copy-Item (Join-Path $repoRoot 'README.md') (Join-Path $stageDir 'README.md') -Force
-    Copy-Item (Join-Path $repoRoot 'README.zh-CN.md') (Join-Path $stageDir 'README.zh-CN.md') -Force
 
     Write-Host "Creating installer with Inno Setup: $iscc"
     & $iscc "/DMyAppVersion=$Version" "/DSourceDir=$stageDir" "/DOutputDir=$outputDir" $installerScriptPath
