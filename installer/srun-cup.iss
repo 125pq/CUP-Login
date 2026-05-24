@@ -45,15 +45,15 @@ Name: "autostart"; Description: "开机启动（当前用户）"; GroupDescripti
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}\CUP Login"; Filename: "{app}\{#MyAppLauncherName}"
-Name: "{autoprograms}\{#MyAppName}\静默登录"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--silent"
-Name: "{autoprograms}\{#MyAppName}\调试登录"; Filename: "{app}\{#MyAppDebugName}"
-Name: "{autoprograms}\{#MyAppName}\开启开机静默启动"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-on"
-Name: "{autoprograms}\{#MyAppName}\关闭开机静默启动"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-off"
-Name: "{autoprograms}\{#MyAppName}\开启断线重连"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-reconnect-on"
-Name: "{autoprograms}\{#MyAppName}\关闭断线重连"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-reconnect-off"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Tasks: desktopicon
-Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--tray"; Tasks: autostart
+Name: "{autoprograms}\{#MyAppName}\CUP Login"; Filename: "{app}\{#MyAppLauncherName}"; IconFilename: "{app}\cup-login.ico"
+Name: "{autoprograms}\{#MyAppName}\静默登录"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--silent"; IconFilename: "{app}\cup-login.ico"
+Name: "{autoprograms}\{#MyAppName}\调试登录"; Filename: "{app}\{#MyAppDebugName}"; IconFilename: "{app}\cup-login.ico"
+Name: "{autoprograms}\{#MyAppName}\开启开机静默启动"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-on"; IconFilename: "{app}\cup-login.ico"
+Name: "{autoprograms}\{#MyAppName}\关闭开机静默启动"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-autostart-off"; IconFilename: "{app}\cup-login.ico"
+Name: "{autoprograms}\{#MyAppName}\开启断线重连"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-reconnect-on"; IconFilename: "{app}\cup-login.ico"
+Name: "{autoprograms}\{#MyAppName}\关闭断线重连"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--set-reconnect-off"; IconFilename: "{app}\cup-login.ico"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; IconFilename: "{app}\cup-login.ico"; Tasks: desktopicon
+Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppLauncherName}"; Parameters: "--tray"; IconFilename: "{app}\cup-login.ico"; Tasks: autostart
 
 [InstallDelete]
 Type: files; Name: "{autoprograms}\{#MyAppName}\Silent login.lnk"
